@@ -1,7 +1,7 @@
-local config = require('session.config')
-local contributors = require('session.contributors')
-local model = require('session.model')
-local storage = require('session.storage')
+local config = require('continuity.core.config')
+local contributors = require('continuity.contributors.registry')
+local model = require('continuity.core.model')
+local storage = require('continuity.persistence.storage')
 
 local M = {}
 
@@ -11,7 +11,7 @@ local state = {
     timer = nil,
 }
 
----@return session.ContinuousConfig
+---@return continuity.ContinuousConfig
 local function live_config()
     return config.get().continuous
 end
@@ -83,7 +83,7 @@ local function builtin_state()
     }
 end
 
----@return session.Record
+---@return continuity.Record
 local function ensure_record()
     if state.record ~= nil then
         return state.record
@@ -175,7 +175,7 @@ local function refresh_contributor(name)
     end)
 end
 
----@return session.Record?
+---@return continuity.Record?
 function M.record()
     if state.record == nil then
         return nil
@@ -209,7 +209,7 @@ local function register_autocmds()
         pcall(vim.api.nvim_del_augroup_by_id, state.group_id)
     end
 
-    state.group_id = vim.api.nvim_create_augroup('session.nvim.live', {
+    state.group_id = vim.api.nvim_create_augroup('continuity.nvim.live', {
         clear = true,
     })
 

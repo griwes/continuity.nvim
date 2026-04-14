@@ -1,4 +1,4 @@
----@class session.Record
+---@class continuity.Record
 ---@field id string
 ---@field name string
 ---@field cwd string
@@ -7,15 +7,17 @@
 ---@field created_at integer
 ---@field updated_at integer
 
----@class session.Contributor
+---@class continuity.Contributor
 ---@field capture? fun(): any
----@field plan_restore? fun(captured: any, record: session.Record): session.RestorePlanStep[]|{ steps: session.RestorePlanStep[] }|nil
+---@field plan_restore? fun(captured: any, record: continuity.Record): continuity.RestorePlanStep[]|{ steps: continuity.RestorePlanStep[] }|nil
+---@field restore? fun(step: continuity.RestorePlanStep, record: continuity.Record, opts?: table)
+---@field restore_phase? '"before_mksession"'|'"after_mksession"'
 ---@field restore_after? string[]
 
 local M = {}
 
 ---@param opts { id: string, name?: string, cwd?: string, state?: table<string, any>, created_at?: integer, updated_at?: integer }
----@return session.Record
+---@return continuity.Record
 function M.new_record(opts)
     local now = os.time()
 
@@ -31,7 +33,7 @@ function M.new_record(opts)
 end
 
 ---@param value any
----@return session.Record?
+---@return continuity.Record?
 function M.restore_record(value)
     if type(value) ~= 'table' or type(value.id) ~= 'string' or value.id == '' then
         return nil

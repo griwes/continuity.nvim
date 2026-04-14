@@ -1,8 +1,8 @@
-local contributors = require('session.contributors')
+local contributors = require('continuity.contributors.registry')
 
 local M = {}
 
----@class session.RestorePlanStep
+---@class continuity.RestorePlanStep
 ---@field id string
 ---@field contributor string
 ---@field kind string
@@ -12,21 +12,21 @@ local M = {}
 ---@field payload any
 ---@field manual boolean
 
----@class session.RestorePlan
+---@class continuity.RestorePlan
 ---@field session_id string
 ---@field session_name string
 ---@field cwd string
----@field steps session.RestorePlanStep[]
+---@field steps continuity.RestorePlanStep[]
 
 ---@param contributor string
 ---@param index integer
 ---@param step table
----@return session.RestorePlanStep
+---@return continuity.RestorePlanStep
 local function normalize_step(contributor, index, step)
     return {
         id = type(step.id) == 'string' and step.id ~= '' and step.id or string.format('%s:%d', contributor, index),
         contributor = contributor,
-        kind = type(step.kind) == 'string' and step.kind ~= '' and step.kind or 'session.restore',
+        kind = type(step.kind) == 'string' and step.kind ~= '' and step.kind or 'continuity.restore',
         title = type(step.title) == 'string' and step.title ~= '' and step.title
             or string.format('Restore %s state', contributor),
         detail = type(step.detail) == 'string' and step.detail ~= '' and step.detail or nil,
@@ -37,10 +37,10 @@ local function normalize_step(contributor, index, step)
 end
 
 ---@param name string
----@param contributor session.Contributor
+---@param contributor continuity.Contributor
 ---@param captured any
----@param record session.Record
----@return session.RestorePlanStep[]
+---@param record continuity.Record
+---@return continuity.RestorePlanStep[]
 local function contributor_steps(name, contributor, captured, record)
     if captured == nil then
         return {}
@@ -49,7 +49,7 @@ local function contributor_steps(name, contributor, captured, record)
     if contributor == nil then
         return {
             normalize_step(name, 1, {
-                kind = 'session.unknown_contributor',
+                kind = 'continuity.unknown_contributor',
                 title = string.format('Review %s restore state', name),
                 detail = string.format(
                     '%s captured state exists, but the contributor is not currently registered',
@@ -64,7 +64,7 @@ local function contributor_steps(name, contributor, captured, record)
     if type(contributor.plan_restore) ~= 'function' then
         return {
             normalize_step(name, 1, {
-                kind = 'session.manual_restore',
+                kind = 'continuity.manual_restore',
                 title = string.format('Review %s restore state', name),
                 detail = string.format('%s captured state exists, but no restore planner is registered yet', name),
                 payload = captured,
@@ -135,14 +135,15 @@ local function ordered_contributors(names)
     return ordered
 end
 
----@param record session.Record
----@return session.RestorePlan
+---@param record continuity.Record
+---@return continuity.RestorePlan
 function M.build(record)
+    local captured_contributors = contributors.normalize_captured(record.contributors or {})
     local steps = {
         {
             id = 'session:cwd',
             contributor = 'session',
-            kind = 'session.chdir',
+            kind = 'continuity.chdir',
             title = 'Change workspace directory',
             detail = string.format('Restore Neovim cwd to %s', record.cwd),
             depends_on = {},
@@ -155,11 +156,11 @@ function M.build(record)
     local tail_step_ids = {
         session = { 'session:cwd' },
     }
-    local contributor_names = ordered_contributors(vim.tbl_keys(record.contributors or {}))
+    local contributor_names = ordered_contributors(vim.tbl_keys(captured_contributors))
 
     for _, name in ipairs(contributor_names) do
         local contributor = contributors.get(name)
-        local contributor_steps_list = contributor_steps(name, contributor, record.contributors[name], record)
+        local contributor_steps_list = contributor_steps(name, contributor, captured_contributors[name], record)
         local dependency_ids = { 'session:cwd' }
         local restore_after = contributor ~= nil
                 and type(contributor.restore_after) == 'table'

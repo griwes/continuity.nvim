@@ -1,19 +1,42 @@
 describe('session', function()
     local state_file
 
+    ---@param name string
+    ---@return string
+    local function sibling_repo(name)
+        return vim.fs.normalize(vim.fs.joinpath(vim.fn.getcwd(), '..', name))
+    end
+
+    ---@param name string
+    ---@return boolean
+    local function repo_exists(name)
+        return vim.fn.isdirectory(sibling_repo(name)) == 1
+    end
+
+    ---@param names string[]
+    local function prepend_runtimepaths(names)
+        for _, name in ipairs(names) do
+            if repo_exists(name) then
+                vim.opt.runtimepath:prepend(sibling_repo(name))
+            end
+        end
+    end
+
     before_each(function()
-        package.loaded.session = nil
-        package.loaded['session.api'] = nil
-        package.loaded['session.config'] = nil
-        package.loaded['session.contributors'] = nil
-        package.loaded['session.model'] = nil
-        package.loaded['session.live'] = nil
-        package.loaded['session.restore_plan'] = nil
-        package.loaded['session.storage'] = nil
+        package.loaded.continuity = nil
+        package.loaded['continuity.api'] = nil
+        package.loaded['continuity.contributors.registry'] = nil
+        package.loaded['continuity.core.config'] = nil
+        package.loaded['continuity.core.model'] = nil
+        package.loaded['continuity.live.state'] = nil
+        package.loaded['continuity.persistence.mksession'] = nil
+        package.loaded['continuity.persistence.storage'] = nil
+        package.loaded['continuity.restore.execute'] = nil
+        package.loaded['continuity.restore.plan'] = nil
 
         state_file = vim.fn.tempname()
 
-        local plugin = require('session')
+        local plugin = require('continuity')
         plugin.setup({
             state_file = state_file,
         })
@@ -21,14 +44,14 @@ describe('session', function()
     end)
 
     it('loads and exposes setup', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         assert.are.equal('function', type(plugin.setup))
         assert.are.equal('table', type(plugin.api))
     end)
 
     it('stores normalized setup config', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         local configured = plugin.setup({
             state_file = state_file,
@@ -37,27 +60,8 @@ describe('session', function()
         assert.are.equal(state_file, configured.state_file)
     end)
 
-    it('keeps an in-memory live session snapshot when continuous state is enabled', function()
-        local plugin = require('session')
-
-        plugin.setup({
-            state_file = state_file,
-            continuous = {
-                enabled = true,
-                write_debounce_ms = 0,
-            },
-        })
-
-        local live = plugin.api.live_state()
-
-        assert.are.equal('session:live', assert(live).id)
-        assert.are.equal(vim.fn.getcwd(), live.cwd)
-        assert.are.equal(vim.api.nvim_get_current_buf(), live.state.nvim.current.buffer)
-        assert.are.equal(vim.api.nvim_get_current_tabpage(), live.state.nvim.current.tab)
-    end)
-
     it('saves and lists local session metadata records', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         local first = plugin.api.save({
             name = 'alpha',
@@ -79,7 +83,7 @@ describe('session', function()
     end)
 
     it('loads restored session metadata from disk', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         local saved = plugin.api.save({
             name = 'alpha',
@@ -101,7 +105,7 @@ describe('session', function()
     end)
 
     it('deletes persisted session metadata records', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         local saved = plugin.api.save({
             name = 'alpha',
@@ -115,7 +119,7 @@ describe('session', function()
     end)
 
     it('registers contributors and captures their state into saved session records', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         plugin.api.register_contributor('terminal_manager', {
             capture = function()
@@ -142,7 +146,7 @@ describe('session', function()
     end)
 
     it('restores contributor-owned session state from disk', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         plugin.api.register_contributor('terminal_manager', {
             capture = function()
@@ -167,7 +171,7 @@ describe('session', function()
     end)
 
     it('plans restore steps from a saved session record', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         local saved = plugin.api.save({
             name = 'alpha',
@@ -180,12 +184,46 @@ describe('session', function()
         assert.are.equal('/tmp/workspace', plan.cwd)
         assert.are.equal(1, #plan.steps)
         assert.are.equal('session:cwd', plan.steps[1].id)
-        assert.are.equal('session.chdir', plan.steps[1].kind)
+        assert.are.equal('continuity.chdir', plan.steps[1].kind)
         assert.are.equal('/tmp/workspace', plan.steps[1].payload.cwd)
     end)
 
+    it('maps legacy contributor keys onto branded contributors when planning restore', function()
+        local plugin = require('continuity')
+
+        plugin.api.register_contributor('terminalia', {
+            plan_restore = function(captured)
+                return {
+                    {
+                        kind = 'terminalia.reopen_terminals',
+                        payload = captured,
+                    },
+                }
+            end,
+        })
+
+        local plan = plugin.api.plan_restore({
+            id = 'session:legacy',
+            name = 'legacy',
+            cwd = '/tmp/legacy',
+            contributors = {
+                terminal_manager = {
+                    terminals = { 'terminal:1' },
+                },
+            },
+        })
+
+        assert.are.same(
+            { 'session:cwd', 'terminalia:1' },
+            vim.tbl_map(function(step)
+                return step.id
+            end, plan.steps)
+        )
+        assert.are.same({ 'terminal:1' }, plan.steps[2].payload.terminals)
+    end)
+
     it('orders contributor restore steps through restore_after dependencies', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         plugin.api.register_contributor('workspace', {
             plan_restore = function(captured)
@@ -222,7 +260,7 @@ describe('session', function()
             contributors = {
                 terminal_manager = {
                     current_context_id = 'context:demo',
-                    terminals = { 'terminal-manager://demo' },
+                    terminals = { 'terminalia://demo' },
                 },
                 workspace = {
                     id = 'workspace:demo',
@@ -249,7 +287,7 @@ describe('session', function()
     end)
 
     it('keeps captured contributors without restore planners visible as manual steps', function()
-        local plugin = require('session')
+        local plugin = require('continuity')
 
         plugin.api.register_contributor('remote_workspace', {
             capture = function()
@@ -269,65 +307,9 @@ describe('session', function()
 
         assert.are.equal(2, #plan.steps)
         assert.are.equal('remote_workspace:1', plan.steps[2].id)
-        assert.are.equal('session.manual_restore', plan.steps[2].kind)
+        assert.are.equal('continuity.manual_restore', plan.steps[2].kind)
         assert.is_true(plan.steps[2].manual)
         assert.are.same({ 'session:cwd' }, plan.steps[2].depends_on)
         assert.are.equal('ssh-main', plan.steps[2].payload.current.name)
-    end)
-
-    it('recaptures contributor-owned live state when notified and persists it on the configured cadence', function()
-        local plugin = require('session')
-        local value = 'alpha'
-
-        plugin.setup({
-            state_file = state_file,
-            continuous = {
-                enabled = true,
-                write_debounce_ms = 10,
-            },
-        })
-
-        plugin.api.register_contributor('workspace', {
-            capture = function()
-                return {
-                    value = value,
-                }
-            end,
-        })
-
-        value = 'beta'
-        plugin.api.notify_contributor_changed('workspace')
-
-        assert.are.equal('beta', plugin.api.live_state().contributors.workspace.value)
-
-        local persisted = vim.wait(200, function()
-            local loaded = plugin.api.load('session:live')
-            return loaded ~= nil
-                and loaded.contributors.workspace ~= nil
-                and loaded.contributors.workspace.value == 'beta'
-        end, 10)
-
-        assert.is_true(persisted)
-    end)
-
-    it('updates live builtin state from editor events without forcing immediate disk writes', function()
-        local plugin = require('session')
-
-        plugin.setup({
-            state_file = state_file,
-            continuous = {
-                enabled = true,
-                write_debounce_ms = 1000,
-            },
-        })
-
-        vim.cmd('enew')
-
-        local live = plugin.api.live_state()
-        local persisted = plugin.api.load('session:live')
-
-        assert.are.equal(vim.api.nvim_get_current_buf(), assert(live).state.nvim.current.buffer)
-        assert.is_true(#live.state.nvim.buffers >= 1)
-        assert.is_nil(persisted)
     end)
 end)

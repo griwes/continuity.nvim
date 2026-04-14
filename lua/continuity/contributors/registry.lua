@@ -1,9 +1,27 @@
 local M = {}
 
 local contributors = {}
+local aliases = {
+    terminal_manager = 'terminalia',
+    git_worktree = 'arboretum',
+    remote_workspace = 'consulate',
+    devcontainer = 'laboratory',
+}
 
 ---@param name string
----@param contributor session.Contributor
+---@return string
+local function canonical_name(name)
+    local alias = aliases[name]
+
+    if alias ~= nil and contributors[alias] ~= nil then
+        return alias
+    end
+
+    return name
+end
+
+---@param name string
+---@param contributor continuity.Contributor
 function M.register(name, contributor)
     assert(type(name) == 'string' and name ~= '', 'Session contributor name must be a non-empty string')
     assert(type(contributor) == 'table', 'Session contributor must be a table')
@@ -12,9 +30,9 @@ function M.register(name, contributor)
 end
 
 ---@param name string
----@return session.Contributor?
+---@return continuity.Contributor?
 function M.get(name)
-    return contributors[name]
+    return contributors[canonical_name(name)]
 end
 
 ---@return string[]
@@ -45,6 +63,22 @@ end
 
 function M.clear()
     contributors = {}
+end
+
+---@param captured? table<string, any>
+---@return table<string, any>
+function M.normalize_captured(captured)
+    local normalized = {}
+
+    for name, value in pairs(captured or {}) do
+        local canonical = canonical_name(name)
+
+        if normalized[canonical] == nil or canonical == name then
+            normalized[canonical] = value
+        end
+    end
+
+    return normalized
 end
 
 return M

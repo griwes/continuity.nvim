@@ -1,12 +1,13 @@
-local contributors = require('session.contributors')
-local live = require('session.live')
-local restore_plan = require('session.restore_plan')
-local storage = require('session.storage')
+local contributors = require('continuity.contributors.registry')
+local live = require('continuity.live.state')
+local restore_execute = require('continuity.restore.execute')
+local restore_plan = require('continuity.restore.plan')
+local storage = require('continuity.persistence.storage')
 
 local M = {}
 
 ---@param opts? { id?: string, name?: string, cwd?: string, state?: table<string, any>, contributors?: table<string, any> }
----@return session.Record
+---@return continuity.Record
 function M.save(opts)
     if opts ~= nil and opts.id ~= nil then
         return storage.save(opts)
@@ -16,7 +17,7 @@ function M.save(opts)
 end
 
 ---@param opts? { id?: string, name?: string, cwd?: string, state?: table<string, any> }
----@return session.Record
+---@return continuity.Record
 function M.capture(opts)
     local payload = vim.tbl_extend('force', {}, opts or {}, {
         contributors = contributors.capture(),
@@ -26,29 +27,29 @@ function M.capture(opts)
 end
 
 ---@param id string
----@return session.Record?
+---@return continuity.Record?
 function M.load(id)
     return storage.get(id)
 end
 
----@return session.Record[]
+---@return continuity.Record[]
 function M.list()
     return storage.list()
 end
 
 ---@param id string
----@return session.Record?
+---@return continuity.Record?
 function M.delete(id)
     return storage.delete(id)
 end
 
----@return session.Record[]
+---@return continuity.Record[]
 function M.restore()
     return storage.restore()
 end
 
----@param session_ref string|session.Record
----@return session.RestorePlan
+---@param session_ref string|continuity.Record
+---@return continuity.RestorePlan
 function M.plan_restore(session_ref)
     local record = type(session_ref) == 'string' and storage.get(session_ref) or session_ref
 
@@ -57,7 +58,20 @@ function M.plan_restore(session_ref)
     return restore_plan.build(vim.deepcopy(record))
 end
 
----@return session.Record?
+---@param session_ref string|continuity.Record
+---@param opts? { use_mksession?: boolean }
+---@return continuity.RestoreExecutionReport
+function M.execute_restore(session_ref, opts)
+    local record = type(session_ref) == 'string' and storage.get(session_ref) or session_ref
+
+    if record == nil then
+        error('Could not resolve a saved session to execute restore from')
+    end
+
+    return restore_execute.execute(vim.deepcopy(record), nil, opts)
+end
+
+---@return continuity.Record?
 function M.live_state()
     return live.record()
 end
@@ -79,11 +93,14 @@ function M.clear(opts)
 end
 
 ---@param name string
----@param contributor session.Contributor
+---@param contributor continuity.Contributor
 function M.register_contributor(name, contributor)
     contributors.register(name, contributor)
 
-    if require('session.config').get().continuous.enabled == true and type(contributor.capture) == 'function' then
+    if
+        require('continuity.core.config').get().continuous.enabled == true
+        and type(contributor.capture) == 'function'
+    then
         live.notify_contributor_changed(name)
     end
 end
