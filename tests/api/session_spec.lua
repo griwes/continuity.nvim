@@ -222,6 +222,93 @@ describe('session', function()
         assert.are.same({ 'terminal:1' }, plan.steps[2].payload.terminals)
     end)
 
+    it('preserves contributor registrations when clearing session state', function()
+        local plugin = require('continuity')
+
+        plugin.api.register_contributor('workspace', {
+            capture = function()
+                return {
+                    cwd = '/tmp/workspace',
+                }
+            end,
+        })
+
+        local captured = plugin.api.capture({
+            name = 'captured',
+        })
+        assert.are.equal('/tmp/workspace', captured.contributors.workspace.cwd)
+        assert.are.same({ 'workspace' }, plugin.api.contributor_names())
+
+        plugin.api.clear({
+            wipe_storage = false,
+        })
+
+        assert.are.same({ 'workspace' }, plugin.api.contributor_names())
+        local recaptured = plugin.api.capture({
+            name = 'recaptured',
+        })
+        assert.are.equal('/tmp/workspace', recaptured.contributors.workspace.cwd)
+
+        plugin.api.clear({
+            wipe_storage = false,
+            wipe_contributors = true,
+        })
+
+        assert.are.same({}, plugin.api.contributor_names())
+    end)
+
+    it('canonicalizes legacy restore_after names when resolving contributor dependencies', function()
+        local plugin = require('continuity')
+
+        plugin.api.register_contributor('workspace', {
+            restore_after = { 'terminal_manager' },
+            plan_restore = function(captured)
+                return {
+                    {
+                        kind = 'workspace.select',
+                        title = 'Select workspace',
+                        payload = captured,
+                    },
+                }
+            end,
+        })
+        plugin.api.register_contributor('terminalia', {
+            restore_after = { 'terminal_manager' },
+            plan_restore = function()
+                return {
+                    {
+                        kind = 'terminalia.reopen_terminals',
+                        title = 'Reopen terminals',
+                    },
+                }
+            end,
+        })
+
+        local saved = plugin.api.save({
+            name = 'canonical-restores',
+            cwd = '/tmp/workspace',
+            contributors = {
+                workspace = {},
+                terminal_manager = {},
+            },
+        })
+
+        local plan = plugin.api.plan_restore(saved.id)
+
+        assert.are.same(
+            {
+                'session:cwd',
+                'terminalia:1',
+                'workspace:1',
+            },
+            vim.tbl_map(function(step)
+                return step.id
+            end, plan.steps)
+        )
+        assert.are.same({ 'session:cwd' }, plan.steps[2].depends_on)
+        assert.are.same({ 'session:cwd', 'terminalia:1' }, plan.steps[3].depends_on)
+    end)
+
     it('orders contributor restore steps through restore_after dependencies', function()
         local plugin = require('continuity')
 

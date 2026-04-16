@@ -85,15 +85,21 @@ end
 
 ---@return continuity.Record
 local function ensure_record()
+    local session_id = live_config().session_id
+
+    if state.record ~= nil and state.record.id ~= session_id then
+        state.record = nil
+    end
+
     if state.record ~= nil then
         return state.record
     end
 
-    local existing = storage.get(live_config().session_id)
+    local existing = storage.get(session_id)
 
     state.record = existing
         or model.new_record({
-            id = live_config().session_id,
+            id = session_id,
             name = 'Live Session',
             cwd = vim.fn.getcwd(),
         })
@@ -262,6 +268,8 @@ function M.stop()
         pcall(vim.api.nvim_del_augroup_by_id, state.group_id)
         state.group_id = nil
     end
+
+    state.record = nil
 end
 
 ---@param opts? { wipe_storage?: boolean }

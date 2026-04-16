@@ -2,12 +2,23 @@ local contributors = require('continuity.contributors.registry')
 
 local M = {}
 
+---@param value any
+---@return string?
+local function canonicalize_contributor_name(value)
+    if type(value) ~= 'string' or value == '' then
+        return nil
+    end
+
+    return next(contributors.normalize_captured({ [value] = true })) or value
+end
+
 ---@class continuity.RestorePlanStep
 ---@field id string
 ---@field contributor string
 ---@field kind string
 ---@field title string
 ---@field detail? string
+---@field restore_phase? '"before_mksession"'|'"after_mksession"'
 ---@field depends_on string[]
 ---@field payload any
 ---@field manual boolean
@@ -90,13 +101,60 @@ local function contributor_steps(name, contributor, captured, record)
 end
 
 ---@param names string[]
----@return string[]
+---@return string[], table<string, string[]>
 local function ordered_contributors(names)
     local ordered = {}
     local visiting = {}
     local visited = {}
+    local include = {}
+    local restore_after = {}
+    local contributor_phase = {}
 
     table.sort(names)
+
+    for _, name in ipairs(names) do
+        include[name] = true
+    end
+
+    for _, name in ipairs(names) do
+        local contributor = contributors.get(name)
+        local phase = contributor ~= nil and contributor.restore_phase == 'after_mksession' and 'after_mksession'
+            or 'before_mksession'
+
+        contributor_phase[name] = phase
+        restore_after[name] = {}
+
+        local dependencies = type(contributor.restore_after) == 'table' and contributor.restore_after or {}
+        local seen = {}
+
+        for _, dependency in ipairs(dependencies) do
+            local canonical = canonicalize_contributor_name(dependency)
+
+            if canonical ~= nil and canonical ~= name and include[canonical] == true and seen[canonical] == nil then
+                table.insert(restore_after[name], canonical)
+                seen[canonical] = true
+            end
+        end
+
+        table.sort(restore_after[name])
+    end
+
+    local changed = true
+    while changed do
+        changed = false
+
+        for _, name in ipairs(names) do
+            if contributor_phase[name] == 'before_mksession' then
+                for _, dependency in ipairs(restore_after[name]) do
+                    if contributor_phase[dependency] == 'after_mksession' then
+                        contributor_phase[name] = 'after_mksession'
+                        changed = true
+                        break
+                    end
+                end
+            end
+        end
+    end
 
     local function visit(name)
         if visited[name] then
@@ -109,17 +167,12 @@ local function ordered_contributors(names)
 
         visiting[name] = true
 
-        local contributor = contributors.get(name)
+        local dependencies = vim.deepcopy(restore_after[name] or {})
+        table.sort(dependencies)
 
-        if contributor ~= nil then
-            local dependencies = type(contributor.restore_after) == 'table' and vim.deepcopy(contributor.restore_after)
-                or {}
-            table.sort(dependencies)
-
-            for _, dependency in ipairs(dependencies) do
-                if vim.tbl_contains(names, dependency) then
-                    visit(dependency)
-                end
+        for _, dependency in ipairs(dependencies) do
+            if include[dependency] then
+                visit(dependency)
             end
         end
 
@@ -132,7 +185,7 @@ local function ordered_contributors(names)
         visit(name)
     end
 
-    return ordered
+    return ordered, restore_after, contributor_phase
 end
 
 ---@param record continuity.Record
@@ -156,16 +209,14 @@ function M.build(record)
     local tail_step_ids = {
         session = { 'session:cwd' },
     }
-    local contributor_names = ordered_contributors(vim.tbl_keys(captured_contributors))
+    local contributor_names, restore_after_by_name, contributor_phase =
+        ordered_contributors(vim.tbl_keys(captured_contributors))
 
     for _, name in ipairs(contributor_names) do
         local contributor = contributors.get(name)
         local contributor_steps_list = contributor_steps(name, contributor, captured_contributors[name], record)
         local dependency_ids = { 'session:cwd' }
-        local restore_after = contributor ~= nil
-                and type(contributor.restore_after) == 'table'
-                and contributor.restore_after
-            or {}
+        local restore_after = restore_after_by_name[name] or {}
 
         for _, dependency in ipairs(restore_after) do
             for _, step_id in ipairs(tail_step_ids[dependency] or {}) do
@@ -174,6 +225,10 @@ function M.build(record)
         end
 
         for index, step in ipairs(contributor_steps_list) do
+            if contributor ~= nil then
+                step.restore_phase = contributor_phase[name] or 'before_mksession'
+            end
+
             if index == 1 then
                 step.depends_on = vim.list_extend(dependency_ids, step.depends_on)
             else

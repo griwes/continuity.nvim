@@ -81,6 +81,10 @@ local function restore_phase(step)
         return 'before_mksession'
     end
 
+    if step.restore_phase == 'after_mksession' then
+        return 'after_mksession'
+    end
+
     local contributor = contributors.get(step.contributor)
 
     if contributor ~= nil and contributor.restore_phase == 'after_mksession' then

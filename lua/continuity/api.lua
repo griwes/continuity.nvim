@@ -85,11 +85,13 @@ function M.notify_contributor_changed(name)
     live.notify_contributor_changed(name)
 end
 
----@param opts? { wipe_storage?: boolean }
+---@param opts? { wipe_storage?: boolean, wipe_contributors?: boolean }
 function M.clear(opts)
     live.clear(opts)
     storage.clear(opts)
-    contributors.clear()
+    if opts ~= nil and opts.wipe_contributors == true then
+        contributors.clear()
+    end
 end
 
 ---@param name string

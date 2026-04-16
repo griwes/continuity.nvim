@@ -699,4 +699,58 @@ describe('continuity restore execution', function()
             },
         }, calls)
     end)
+
+    it('normalizes pre/post mksession dependency edges to avoid cross-phase ordering failures', function()
+        local plugin = require('continuity')
+        local root = vim.fn.tempname()
+        local calls = {}
+
+        vim.fn.mkdir(root, 'p')
+
+        plugin.api.register_contributor('terminal_manager', {
+            restore_phase = 'after_mksession',
+            plan_restore = function()
+                return {
+                    {
+                        kind = 'terminalia.reopen_terminals',
+                        title = 'Reopen terminals',
+                    },
+                }
+            end,
+            restore = function(step)
+                table.insert(calls, step.kind)
+            end,
+        })
+        plugin.api.register_contributor('workspace', {
+            restore_after = { 'terminal_manager' },
+            plan_restore = function()
+                return {
+                    {
+                        kind = 'workspace.select',
+                        title = 'Select workspace',
+                    },
+                }
+            end,
+            restore = function(step)
+                table.insert(calls, step.kind)
+            end,
+        })
+
+        local saved = plugin.api.save({
+            name = 'ordered-normalized-cross-phase',
+            cwd = root,
+            contributors = {
+                terminal_manager = {},
+                workspace = {},
+            },
+        })
+
+        local report = plugin.api.execute_restore(saved.id, {
+            use_mksession = false,
+        })
+
+        assert.are.same({ 'session:cwd', 'terminal_manager:1', 'workspace:1' }, report.executed_steps)
+        assert.are.same({ 'terminalia.reopen_terminals', 'workspace.select' }, calls)
+        assert.is_false(report.mksession_loaded)
+    end)
 end)
