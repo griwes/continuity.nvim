@@ -170,6 +170,137 @@ describe('continuity restore execution', function()
         assert.are.equal(1, vim.fn.filereadable(mksession.path(saved.id)))
     end)
 
+    it('captures mksession with configured dogfood sessionoptions without mutating the ambient option', function()
+        local plugin = require('continuity')
+        local session_dir = vim.fs.joinpath(vim.fn.tempname(), 'views')
+        local root = vim.fn.tempname()
+        local first = vim.fs.joinpath(root, 'first.txt')
+        local second = vim.fs.joinpath(root, 'second.txt')
+        local original_sessionoptions = vim.o.sessionoptions
+
+        vim.fn.mkdir(root, 'p')
+        vim.fn.writefile({ 'first' }, first)
+        vim.fn.writefile({ 'second' }, second)
+
+        local ok, err = pcall(function()
+            vim.o.sessionoptions = 'buffers,curdir'
+
+            plugin.setup({
+                state_file = state_file,
+                mksession = {
+                    enabled = true,
+                    dir = session_dir,
+                    sessionoptions = {
+                        'blank',
+                        'buffers',
+                        'curdir',
+                        'folds',
+                        'help',
+                        'tabpages',
+                        'winsize',
+                        'winpos',
+                        'terminal',
+                        'globals',
+                    },
+                },
+            })
+
+            vim.api.nvim_set_current_dir(root)
+            vim.cmd('silent! tabonly!')
+            vim.cmd.edit(vim.fn.fnameescape(first))
+            vim.cmd.tabnew(vim.fn.fnameescape(second))
+
+            local saved = plugin.api.save({
+                name = 'dogfood-sessionoptions',
+                cwd = root,
+            })
+
+            assert.are.equal('buffers,curdir', vim.o.sessionoptions)
+
+            vim.cmd('silent! tabonly!')
+            vim.cmd('enew!')
+
+            local report = plugin.api.execute_restore(saved.id)
+
+            assert.is_true(report.mksession_loaded)
+            assert.are.equal(root, vim.fn.getcwd())
+            assert.is_true(#vim.api.nvim_list_tabpages() >= 2)
+        end)
+
+        vim.o.sessionoptions = original_sessionoptions
+        vim.cmd('silent! tabonly!')
+
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it('accepts comma-separated mksession sessionoptions strings', function()
+        local plugin = require('continuity')
+        local session_dir = vim.fs.joinpath(vim.fn.tempname(), 'views')
+        local original_sessionoptions = vim.o.sessionoptions
+
+        local ok, err = pcall(function()
+            vim.o.sessionoptions = 'buffers,curdir'
+
+            plugin.setup({
+                state_file = state_file,
+                mksession = {
+                    enabled = true,
+                    dir = session_dir,
+                    sessionoptions = 'blank,buffers,curdir,tabpages',
+                },
+            })
+
+            local saved = plugin.api.save({
+                name = 'string-sessionoptions',
+            })
+            local mksession = require('continuity.persistence.mksession')
+
+            assert.are.equal(1, vim.fn.filereadable(mksession.path(saved.id)))
+            assert.are.equal('buffers,curdir', vim.o.sessionoptions)
+        end)
+
+        vim.o.sessionoptions = original_sessionoptions
+
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it('restores ambient sessionoptions when configured sessionoptions fail', function()
+        local plugin = require('continuity')
+        local original_sessionoptions = vim.o.sessionoptions
+
+        local ok, err = pcall(function()
+            vim.o.sessionoptions = 'buffers,curdir'
+
+            plugin.setup({
+                state_file = state_file,
+                mksession = {
+                    enabled = true,
+                    dir = vim.fs.joinpath(vim.fn.tempname(), 'views'),
+                    sessionoptions = 'not-a-real-session-option',
+                },
+            })
+
+            local saved_ok = pcall(function()
+                plugin.api.save({
+                    name = 'bad-sessionoptions',
+                })
+            end)
+
+            assert.is_false(saved_ok)
+            assert.are.equal('buffers,curdir', vim.o.sessionoptions)
+        end)
+
+        vim.o.sessionoptions = original_sessionoptions
+
+        if not ok then
+            error(err)
+        end
+    end)
+
     it('replays worktree and remote contributors before mksession and Terminalia reopen', function()
         local plugin = require('continuity')
         local root = vim.fn.tempname()
@@ -698,6 +829,238 @@ describe('continuity restore execution', function()
                 view = 'float',
             },
         }, calls)
+    end)
+
+    it('integrates real dogfood providers including Tabulature hierarchy replay when available', function()
+        if
+            not repo_exists('arboretum.nvim')
+            or not repo_exists('consulate.nvim')
+            or not repo_exists('laboratory.nvim')
+            or not repo_exists('tabulature.nvim')
+            or not repo_exists('terminalia.nvim')
+        then
+            assert.is_true(true)
+            return
+        end
+
+        prepend_runtimepaths({
+            'terminalia.nvim',
+            'arboretum.nvim',
+            'consulate.nvim',
+            'laboratory.nvim',
+            'tabulature.nvim',
+        })
+
+        package.loaded.arboretum = nil
+        package.loaded['arboretum.api'] = nil
+        package.loaded.consulate = nil
+        package.loaded['consulate.api'] = nil
+        package.loaded.laboratory = nil
+        package.loaded['laboratory.api'] = nil
+        package.loaded.tabulature = nil
+        package.loaded['tabulature.session'] = nil
+        package.loaded['tabulature.state'] = nil
+        package.loaded.terminalia = nil
+        package.loaded['terminalia.api'] = nil
+
+        require('terminalia').setup({
+            history_dir = vim.fn.tempname(),
+            notify_on_exit = false,
+            persist_terminals = false,
+            state_file = vim.fn.tempname(),
+        })
+
+        require('arboretum').setup({
+            notify = false,
+            system_runner = function()
+                error('unexpected git invocation in session integration test')
+            end,
+        })
+
+        require('consulate').setup({})
+        require('laboratory').setup({})
+        require('tabulature').setup({
+            commands = false,
+            manifold = false,
+            theme = false,
+        })
+
+        local calls = {}
+        local original_switch = arboretum.api.switch
+        local original_consulate_set_current = consulate.api.set_current
+        local original_consulate_reopen_terminal = consulate.api.reopen_terminal
+        local original_laboratory_set_current = laboratory.api.set_current
+        local original_laboratory_open_terminal = laboratory.api.open_terminal
+        local original_open_uri = terminalia.api.open_uri
+
+        arboretum.api.switch = function(options)
+            table.insert(calls, {
+                kind = 'arboretum.switch',
+                value = options.path,
+            })
+            return {
+                target = {
+                    path = options.path,
+                },
+            }
+        end
+        consulate.api.set_current = function(item)
+            table.insert(calls, {
+                kind = 'consulate.use',
+                value = item.id,
+            })
+            return item
+        end
+        consulate.api.reopen_terminal = function(id, opts)
+            table.insert(calls, {
+                kind = 'consulate.reopen_terminals',
+                value = id,
+                view = opts.view,
+            })
+            return {
+                id = 'remote:' .. id,
+            }
+        end
+        laboratory.api.set_current = function(item)
+            table.insert(calls, {
+                kind = 'laboratory.select',
+                value = item.id,
+            })
+            return item
+        end
+        laboratory.api.open_terminal = function(id, opts)
+            table.insert(calls, {
+                kind = 'laboratory.reopen_terminals',
+                value = id,
+                view = opts.view,
+            })
+            return {
+                id = 'dev:' .. id,
+            }
+        end
+        terminalia.api.open_uri = function(uri, opts)
+            table.insert(calls, {
+                kind = 'terminalia.reopen_terminals',
+                value = uri,
+                view = opts.view,
+            })
+            return {
+                id = 'terminal:restored',
+            }
+        end
+
+        local root = vim.fn.tempname()
+        vim.fn.mkdir(root, 'p')
+
+        local terminal_uri = require('terminalia.uri').encode_terminal_uri({
+            id = 'terminal:dogfood',
+            name = 'build',
+            context_id = 'context:host',
+        })
+
+        local saved = plugin.api.save({
+            name = 'dogfood-all-provider-integration',
+            cwd = root,
+            contributors = {
+                arboretum = {
+                    current = {
+                        path = '/repo/feature',
+                        branch_ref = 'refs/heads/feature/demo',
+                    },
+                },
+                consulate = {
+                    current = {
+                        id = 'ssh|devbox|/repo|/srv/project',
+                        name = 'project-ssh',
+                        host = 'devbox',
+                    },
+                    linked_terminals = {
+                        {
+                            id = 'remoteterminal:1',
+                            view = 'float',
+                        },
+                    },
+                },
+                laboratory = {
+                    current = {
+                        id = 'devcontainer:workspace',
+                        name = 'workspace',
+                        config_path = '/repo/.devcontainer/laboratory.json',
+                    },
+                    linked_terminals = {
+                        {
+                            id = 'devcontainerterminal:1',
+                            view = 'float',
+                        },
+                    },
+                },
+                tabulature = {
+                    version = 1,
+                    children = {
+                        {
+                            label = 'Workspace',
+                            selected_child_index = 1,
+                            children = {
+                                {
+                                    label = 'Editor',
+                                    active = true,
+                                },
+                            },
+                        },
+                    },
+                },
+                terminalia = {
+                    current_context_id = 'context:host',
+                    terminals = {
+                        {
+                            uri = terminal_uri,
+                            preferred_view = 'float',
+                        },
+                    },
+                },
+            },
+        })
+
+        local report = plugin.api.execute_restore(saved.id, {
+            use_mksession = false,
+        })
+        local tab_tree = require('tabulature.state').to_tree()
+
+        arboretum.api.switch = original_switch
+        consulate.api.set_current = original_consulate_set_current
+        consulate.api.reopen_terminal = original_consulate_reopen_terminal
+        laboratory.api.set_current = original_laboratory_set_current
+        laboratory.api.open_terminal = original_laboratory_open_terminal
+        terminalia.api.open_uri = original_open_uri
+
+        assert.are.same({
+            'arboretum',
+            'consulate',
+            'laboratory',
+            'tabulature',
+            'terminalia',
+        }, plugin.api.contributor_names())
+        assert.are.same({
+            'session:cwd',
+            'arboretum:1',
+            'consulate:1',
+            'consulate:2',
+            'laboratory:1',
+            'laboratory:2',
+            'tabulature:1',
+            'terminalia:1',
+        }, report.executed_steps)
+        assert.are.same({
+            { kind = 'arboretum.switch', value = '/repo/feature' },
+            { kind = 'consulate.use', value = 'ssh|devbox|/repo|/srv/project' },
+            { kind = 'consulate.reopen_terminals', value = 'remoteterminal:1', view = 'float' },
+            { kind = 'laboratory.select', value = 'devcontainer:workspace' },
+            { kind = 'laboratory.reopen_terminals', value = 'devcontainerterminal:1', view = 'float' },
+            { kind = 'terminalia.reopen_terminals', value = terminal_uri, view = 'float' },
+        }, calls)
+        assert.are.equal('Workspace', tab_tree.children[1].label)
+        assert.are.equal('Editor', tab_tree.children[1].children[1].label)
+        assert.is_true(tab_tree.children[1].children[1].active)
     end)
 
     it('normalizes pre/post mksession dependency edges to avoid cross-phase ordering failures', function()

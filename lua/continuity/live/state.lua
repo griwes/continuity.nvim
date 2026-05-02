@@ -1,6 +1,7 @@
 local config = require('continuity.core.config')
 local contributors = require('continuity.contributors.registry')
 local model = require('continuity.core.model')
+local session_key = require('continuity.core.session_key')
 local storage = require('continuity.persistence.storage')
 
 local M = {}
@@ -19,6 +20,34 @@ end
 ---@return boolean
 local function enabled()
     return live_config().enabled == true
+end
+
+---@return string
+local function live_session_id()
+    local session_id = live_config().session_id
+
+    if session_id == 'auto' then
+        return session_key.current().id
+    end
+
+    return session_id
+end
+
+---@return boolean
+local function uses_auto_session_id()
+    return live_config().session_id == 'auto'
+end
+
+---@param record continuity.Record
+local function apply_auto_session_key_state(record)
+    if not uses_auto_session_id() then
+        return
+    end
+
+    record.state.continuity = record.state.continuity or {}
+    record.state.continuity.session_key = session_key.state({
+        cwd = record.cwd,
+    })
 end
 
 local function stop_timer()
@@ -85,7 +114,7 @@ end
 
 ---@return continuity.Record
 local function ensure_record()
-    local session_id = live_config().session_id
+    local session_id = live_session_id()
 
     if state.record ~= nil and state.record.id ~= session_id then
         state.record = nil
@@ -103,6 +132,8 @@ local function ensure_record()
             name = 'Live Session',
             cwd = vim.fn.getcwd(),
         })
+
+    apply_auto_session_key_state(state.record)
 
     return state.record
 end
@@ -157,6 +188,7 @@ end
 local function refresh_builtin_state()
     update_record(function(record)
         record.cwd = vim.fn.getcwd()
+        apply_auto_session_key_state(record)
         record.state.nvim = builtin_state()
     end)
 end
@@ -191,6 +223,10 @@ function M.record()
 end
 
 function M.refresh_all()
+    if not enabled() then
+        return
+    end
+
     refresh_builtin_state()
 
     for _, name in ipairs(contributors.names()) do
@@ -206,6 +242,10 @@ end
 
 ---@param name string
 function M.notify_contributor_changed(name)
+    if not enabled() then
+        return
+    end
+
     refresh_contributor(name)
     schedule_persist()
 end
@@ -224,16 +264,28 @@ local function register_autocmds()
         'BufDelete',
         'BufEnter',
         'BufFilePost',
-        'BufModifiedSet',
+        'BufWritePost',
         'DirChanged',
         'TabClosed',
         'TabEnter',
         'TabNewEntered',
+        'TextChanged',
+        'TextChangedI',
+        'TextChangedP',
         'VimLeavePre',
         'WinClosed',
         'WinEnter',
     }, {
         group = state.group_id,
+        callback = function()
+            refresh_builtin_state()
+            schedule_persist()
+        end,
+    })
+
+    vim.api.nvim_create_autocmd('OptionSet', {
+        group = state.group_id,
+        pattern = 'modified',
         callback = function()
             refresh_builtin_state()
             schedule_persist()
@@ -278,7 +330,7 @@ function M.clear(opts)
     state.record = nil
 
     if enabled() and (opts == nil or opts.wipe_storage ~= false) then
-        storage.delete(live_config().session_id)
+        storage.delete(live_session_id())
     end
 end
 

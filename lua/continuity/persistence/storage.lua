@@ -1,10 +1,12 @@
 local config = require('continuity.core.config')
 local mksession = require('continuity.persistence.mksession')
 local model = require('continuity.core.model')
+local session_key = require('continuity.core.session_key')
 
 local M = {}
 
 local state = {
+    last_session_id = nil,
     next_id = 1,
     sessions = {},
 }
@@ -20,6 +22,7 @@ local function persist()
     vim.fn.mkdir(vim.fn.fnamemodify(path, ':h'), 'p')
     vim.fn.writefile({
         vim.json.encode({
+            last_session_id = state.last_session_id,
             next_id = state.next_id,
             sessions = vim.tbl_values(state.sessions),
         }),
@@ -52,6 +55,7 @@ function M.save(record)
         updated_at = os.time(),
     }))
     state.sessions[restored.id] = restored
+    state.last_session_id = restored.id
     persist()
     mksession.capture(restored.id)
     return vim.deepcopy(restored)
@@ -60,8 +64,27 @@ end
 ---@param opts? { id?: string, name?: string, cwd?: string, state?: table<string, any>, contributors?: table<string, any> }
 ---@return continuity.Record
 function M.create(opts)
-    return M.save(model.new_record(vim.tbl_extend('force', opts or {}, {
-        id = alloc_id(),
+    local create_opts = vim.deepcopy(opts or {})
+
+    if create_opts.id == nil and config.get().session_key.use_git_branch == true then
+        local key = session_key.current({
+            cwd = create_opts.cwd,
+        })
+        create_opts.id = key.id
+        create_opts.name = type(create_opts.name) == 'string' and create_opts.name ~= '' and create_opts.name
+            or key.name
+        create_opts.cwd = key.cwd
+        create_opts.state = vim.tbl_deep_extend('force', create_opts.state or {}, {
+            continuity = {
+                session_key = session_key.state({
+                    cwd = key.cwd,
+                }),
+            },
+        })
+    end
+
+    return M.save(model.new_record(vim.tbl_extend('force', create_opts, {
+        id = create_opts.id or alloc_id(),
     })))
 end
 
@@ -77,6 +100,11 @@ function M.list()
     return vim.tbl_map(vim.deepcopy, sorted_sessions())
 end
 
+---@return string?
+function M.last_session_id()
+    return state.last_session_id
+end
+
 ---@param id string
 ---@return continuity.Record?
 function M.delete(id)
@@ -87,6 +115,9 @@ function M.delete(id)
     end
 
     state.sessions[id] = nil
+    if state.last_session_id == id then
+        state.last_session_id = nil
+    end
     persist()
     mksession.delete(id)
     return vim.deepcopy(record)
@@ -94,6 +125,7 @@ end
 
 ---@param opts? { wipe_storage?: boolean }
 function M.clear(opts)
+    state.last_session_id = nil
     state.next_id = 1
     state.sessions = {}
 
@@ -122,6 +154,7 @@ function M.restore()
         return {}
     end
 
+    state.last_session_id = type(decoded.last_session_id) == 'string' and decoded.last_session_id or nil
     state.next_id = tonumber(decoded.next_id) or 1
     state.sessions = {}
 
@@ -131,6 +164,10 @@ function M.restore()
         if restored ~= nil then
             state.sessions[restored.id] = restored
         end
+    end
+
+    if state.last_session_id ~= nil and state.sessions[state.last_session_id] == nil then
+        state.last_session_id = nil
     end
 
     return M.list()

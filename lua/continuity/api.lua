@@ -1,7 +1,10 @@
 local contributors = require('continuity.contributors.registry')
 local live = require('continuity.live.state')
+local autoload = require('continuity.restore.autoload')
 local restore_execute = require('continuity.restore.execute')
 local restore_plan = require('continuity.restore.plan')
+local session_key = require('continuity.core.session_key')
+local session_items = require('continuity.core.session_items')
 local storage = require('continuity.persistence.storage')
 
 local M = {}
@@ -37,6 +40,16 @@ function M.list()
     return storage.list()
 end
 
+---@return continuity.SessionItem[]
+function M.session_items()
+    return session_items.items()
+end
+
+---@return string[]
+function M.session_lines()
+    return session_items.lines()
+end
+
 ---@param id string
 ---@return continuity.Record?
 function M.delete(id)
@@ -46,6 +59,17 @@ end
 ---@return continuity.Record[]
 function M.restore()
     return storage.restore()
+end
+
+---@param opts? { cwd?: string, use_git_branch?: boolean }
+---@return continuity.SessionKey
+function M.current_session_key(opts)
+    return session_key.current(opts)
+end
+
+---@return continuity.AutoloadReport
+function M.autoload()
+    return autoload.run()
 end
 
 ---@param session_ref string|continuity.Record

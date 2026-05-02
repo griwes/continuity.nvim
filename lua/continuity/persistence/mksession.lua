@@ -1,4 +1,5 @@
 local config = require('continuity.core.config')
+local session_key = require('continuity.core.session_key')
 
 local M = {}
 
@@ -7,11 +8,63 @@ local function session_config()
     return config.get().mksession
 end
 
+---@param value? string|string[]
+---@return string?
+local function normalize_sessionoptions(value)
+    if type(value) == 'string' then
+        return value
+    end
+
+    if type(value) ~= 'table' then
+        return nil
+    end
+
+    local parts = {}
+
+    for _, item in ipairs(value) do
+        if type(item) == 'string' and item ~= '' then
+            table.insert(parts, item)
+        end
+    end
+
+    return table.concat(parts, ',')
+end
+
+---@param callback fun()
+local function with_sessionoptions(callback)
+    local configured = normalize_sessionoptions(session_config().sessionoptions)
+
+    if configured == nil then
+        callback()
+        return
+    end
+
+    local original = vim.o.sessionoptions
+    local ok, err = pcall(function()
+        vim.o.sessionoptions = configured
+        callback()
+    end)
+    vim.o.sessionoptions = original
+
+    if not ok then
+        error(err)
+    end
+end
+
 ---@param id string
 ---@return boolean
 local function live_session(id)
     local continuous = config.get().continuous
-    return continuous.enabled == true and continuous.session_id == id
+
+    if continuous.enabled ~= true then
+        return false
+    end
+
+    if continuous.session_id == 'auto' then
+        return session_key.current().id == id
+    end
+
+    return continuous.session_id == id
 end
 
 ---@param id string
@@ -59,7 +112,9 @@ function M.capture(id)
 
     local path = M.path(id)
     vim.fn.mkdir(vim.fn.fnamemodify(path, ':h'), 'p')
-    vim.cmd(string.format('silent! mksession! %s', vim.fn.fnameescape(path)))
+    with_sessionoptions(function()
+        vim.cmd(string.format('silent! mksession! %s', vim.fn.fnameescape(path)))
+    end)
 end
 
 ---@param id string

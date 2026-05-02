@@ -1,5 +1,6 @@
 describe('session', function()
     local state_file
+    local test_git = require('tests.helpers.git')
 
     ---@param name string
     ---@return string
@@ -28,6 +29,7 @@ describe('session', function()
         package.loaded['continuity.contributors.registry'] = nil
         package.loaded['continuity.core.config'] = nil
         package.loaded['continuity.core.model'] = nil
+        package.loaded['continuity.core.session_key'] = nil
         package.loaded['continuity.live.state'] = nil
         package.loaded['continuity.persistence.mksession'] = nil
         package.loaded['continuity.persistence.storage'] = nil
@@ -80,6 +82,49 @@ describe('session', function()
         assert.are.equal('session:2', second.id)
         assert.are.same({ 'session:1', 'session:2' }, { listed[1].id, listed[2].id })
         assert.are.equal('terminal:1', listed[1].state.terminal)
+    end)
+
+    it('derives opt-in session ids from cwd and Git branch', function()
+        local plugin = require('continuity')
+        local repo = test_git.repo('continuity-git')
+
+        plugin.setup({
+            state_file = state_file,
+            session_key = {
+                use_git_branch = true,
+            },
+        })
+
+        local main = plugin.api.save({
+            cwd = repo,
+        })
+
+        test_git.run({ 'checkout', '-b', 'feature/dogfood' }, repo)
+
+        local feature = plugin.api.save({
+            cwd = repo,
+        })
+        local listed = plugin.api.list()
+
+        assert.are.equal(2, #listed)
+        assert.is_true(main.id:find('session:') == 1)
+        assert.is_true(feature.id:find('feature_dogfood', 1, true) ~= nil)
+        assert.are_not.equal(main.id, feature.id)
+        assert.are.equal('main', main.state.continuity.session_key.branch)
+        assert.are.equal('feature/dogfood', feature.state.continuity.session_key.branch)
+        assert.are.equal(repo, feature.state.continuity.session_key.cwd)
+    end)
+
+    it('keeps sequential session ids as the default', function()
+        local plugin = require('continuity')
+        local repo = test_git.repo('continuity-git')
+
+        local saved = plugin.api.save({
+            cwd = repo,
+        })
+
+        assert.are.equal('session:1', saved.id)
+        assert.is_nil(saved.state.continuity)
     end)
 
     it('loads restored session metadata from disk', function()
