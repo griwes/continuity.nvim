@@ -444,4 +444,27 @@ describe('session', function()
         assert.are.same({ 'session:cwd' }, plan.steps[2].depends_on)
         assert.are.equal('ssh-main', plan.steps[2].payload.current.name)
     end)
+
+    it('keeps captured contributors without registrations visible as unknown steps', function()
+        local plugin = require('continuity')
+
+        local saved = plugin.api.save({
+            name = 'unknown',
+            cwd = '/tmp/workspace',
+            contributors = {
+                retired_provider = {
+                    value = 'preserved',
+                },
+            },
+        })
+
+        local plan = plugin.api.plan_restore(saved.id)
+
+        assert.are.equal(2, #plan.steps)
+        assert.are.equal('retired_provider:1', plan.steps[2].id)
+        assert.are.equal('continuity.unknown_contributor', plan.steps[2].kind)
+        assert.is_true(plan.steps[2].manual)
+        assert.are.same({ 'session:cwd' }, plan.steps[2].depends_on)
+        assert.are.equal('preserved', plan.steps[2].payload.value)
+    end)
 end)

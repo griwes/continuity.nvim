@@ -124,7 +124,10 @@ local function ordered_contributors(names)
         contributor_phase[name] = phase
         restore_after[name] = {}
 
-        local dependencies = type(contributor.restore_after) == 'table' and contributor.restore_after or {}
+        local dependencies = type(contributor) == 'table'
+                and type(contributor.restore_after) == 'table'
+                and contributor.restore_after
+            or {}
         local seen = {}
 
         for _, dependency in ipairs(dependencies) do
