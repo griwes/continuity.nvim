@@ -3,7 +3,10 @@ local M = {}
 ---@param prefix string
 ---@return string
 local function mkdtemp(prefix)
-    local dir, err = vim.uv.fs_mkdtemp(vim.fs.joinpath(vim.fn.stdpath('run'), prefix .. '.XXXXXX'))
+    local run_dir = vim.fn.stdpath('run')
+    vim.fn.mkdir(run_dir, 'p')
+
+    local dir, err = vim.uv.fs_mkdtemp(vim.fs.joinpath(run_dir, prefix .. '.XXXXXX'))
 
     assert(dir, err)
 
