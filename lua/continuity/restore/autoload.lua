@@ -1,4 +1,5 @@
 local config = require('continuity.core.config')
+local layout = require('continuity.restore.layout')
 local restore_execute = require('continuity.restore.execute')
 local session_key = require('continuity.core.session_key')
 local storage = require('continuity.persistence.storage')
@@ -77,6 +78,25 @@ local function newest_for_cwd(cwd)
     return newest(matches, storage.last_session_id())
 end
 
+---@param record continuity.Record
+local function schedule_startup_rebind(record)
+    local function rebind()
+        pcall(layout.rebind_buffers, vim.deepcopy(record))
+    end
+
+    if vim.v.vim_did_enter == 1 then
+        vim.schedule(rebind)
+        return
+    end
+
+    vim.api.nvim_create_autocmd('VimEnter', {
+        once = true,
+        callback = function()
+            vim.schedule(rebind)
+        end,
+    })
+end
+
 ---@param policy continuity.AutoloadPolicy
 ---@return continuity.Record?
 function M.select(policy)
@@ -135,6 +155,8 @@ function M.run()
         })
         return state.last_report
     end
+
+    schedule_startup_rebind(record)
 
     state.last_report = report(policy, {
         loaded = true,

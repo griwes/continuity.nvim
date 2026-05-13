@@ -2,16 +2,6 @@ local contributors = require('continuity.contributors.registry')
 
 local M = {}
 
----@param value any
----@return string?
-local function canonicalize_contributor_name(value)
-    if type(value) ~= 'string' or value == '' then
-        return nil
-    end
-
-    return next(contributors.normalize_captured({ [value] = true })) or value
-end
-
 ---@class continuity.RestorePlanStep
 ---@field id string
 ---@field contributor string
@@ -131,11 +121,15 @@ local function ordered_contributors(names)
         local seen = {}
 
         for _, dependency in ipairs(dependencies) do
-            local canonical = canonicalize_contributor_name(dependency)
-
-            if canonical ~= nil and canonical ~= name and include[canonical] == true and seen[canonical] == nil then
-                table.insert(restore_after[name], canonical)
-                seen[canonical] = true
+            if
+                type(dependency) == 'string'
+                and dependency ~= ''
+                and dependency ~= name
+                and include[dependency] == true
+                and seen[dependency] == nil
+            then
+                table.insert(restore_after[name], dependency)
+                seen[dependency] = true
             end
         end
 

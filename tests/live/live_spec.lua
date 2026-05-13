@@ -253,6 +253,189 @@ describe('continuity live state', function()
         assert.are.equal(2, #live.state.nvim.tabs[1].windows)
     end)
 
+    it('refreshes live state only after restored windows are rebound to file buffers', function()
+        local plugin = require('continuity')
+        local root = vim.fn.tempname()
+        local first = vim.fs.joinpath(root, 'first.txt')
+        local second = vim.fs.joinpath(root, 'second.txt')
+
+        vim.cmd('silent! tabonly!')
+        vim.cmd('silent! only!')
+        vim.cmd('enew!')
+
+        vim.fn.mkdir(root, 'p')
+        vim.fn.writefile({ 'first' }, first)
+        vim.fn.writefile({ 'second' }, second)
+        vim.api.nvim_set_current_dir(root)
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 0,
+            },
+        })
+
+        vim.cmd.edit(vim.fn.fnameescape(first))
+        vim.cmd('belowright split')
+        vim.cmd.edit(vim.fn.fnameescape(second))
+
+        local saved = plugin.api.capture({
+            id = 'two-file-windows',
+            name = 'two-file-windows',
+            cwd = root,
+        })
+
+        vim.cmd('silent! only!')
+        vim.cmd('enew!')
+
+        local report = plugin.api.execute_restore(saved.id)
+        local live = assert(plugin.api.live_state())
+        local persisted = assert(plugin.api.load('session:live'))
+        local buffer_names = {}
+        local visible = {}
+
+        for _, buffer in ipairs(live.state.nvim.buffers or {}) do
+            buffer_names[buffer.id] = buffer.name
+        end
+
+        for _, tab in ipairs(live.state.nvim.tabs or {}) do
+            for _, win in ipairs(tab.windows or {}) do
+                visible[vim.fs.normalize(buffer_names[win.buffer] or '')] = true
+            end
+        end
+
+        assert.is_true(report.layout_restored)
+        assert.are.equal(2, #live.state.nvim.tabs[1].windows)
+        assert.is_true(visible[vim.fs.normalize(first)])
+        assert.is_true(visible[vim.fs.normalize(second)])
+        assert.are.same(live.state.nvim.tabs, persisted.state.nvim.tabs)
+    end)
+
+    it('does not persist hidden unnamed scratch buffers', function()
+        local plugin = require('continuity')
+
+        vim.cmd('silent! tabonly!')
+        vim.cmd('silent! only!')
+        vim.cmd('enew!')
+
+        local hidden = vim.api.nvim_create_buf(true, false)
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 0,
+            },
+        })
+
+        plugin.api.sync_live_state()
+
+        local saved_buffers = {}
+
+        for _, buffer in ipairs(assert(plugin.api.live_state()).state.nvim.buffers or {}) do
+            saved_buffers[buffer.id] = buffer
+        end
+
+        assert.is_true(vim.api.nvim_buf_is_valid(hidden))
+        assert.is_nil(saved_buffers[hidden])
+    end)
+
+    it('uses a window last-file fallback for empty anonymous window buffers', function()
+        local plugin = require('continuity')
+        local root = vim.fn.tempname()
+        local left = vim.fs.joinpath(root, 'left.txt')
+        local right = vim.fs.joinpath(root, 'README.md')
+        local other = vim.fs.joinpath(root, 'other.txt')
+
+        vim.cmd('silent! tabonly!')
+        vim.cmd('silent! only!')
+        vim.cmd('enew!')
+
+        vim.fn.mkdir(root, 'p')
+        vim.fn.writefile({ 'left' }, left)
+        vim.fn.writefile({ 'right' }, right)
+        vim.fn.writefile({ 'other' }, other)
+        vim.api.nvim_set_current_dir(root)
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 0,
+            },
+        })
+
+        vim.cmd.edit(vim.fn.fnameescape(left))
+        vim.cmd.vsplit(vim.fn.fnameescape(right))
+        plugin.api.sync_live_state()
+
+        vim.cmd.enew()
+        vim.cmd.tabnew(vim.fn.fnameescape(other))
+
+        local saved = plugin.api.capture({
+            id = 'remember-file-window',
+            name = 'remember-file-window',
+            cwd = root,
+        })
+        local buffer_names = {}
+        local visible = {}
+
+        for _, buffer in ipairs(saved.state.nvim.buffers or {}) do
+            buffer_names[buffer.id] = buffer.name
+        end
+
+        for _, win in ipairs(saved.state.nvim.tabs[1].windows or {}) do
+            visible[vim.fs.normalize(buffer_names[win.buffer] or '')] = true
+        end
+
+        assert.is_true(visible[vim.fs.normalize(left)])
+        assert.is_true(visible[vim.fs.normalize(right)])
+    end)
+
+    it('excludes floating UI windows and their unlisted buffers from builtin state capture', function()
+        local plugin = require('continuity')
+
+        vim.cmd('silent! tabonly!')
+        vim.cmd('silent! only!')
+        vim.cmd('enew')
+
+        local uri_buffer = vim.api.nvim_get_current_buf()
+        vim.bo[uri_buffer].buftype = 'nofile'
+        vim.bo[uri_buffer].swapfile = false
+        vim.api.nvim_buf_set_name(uri_buffer, 'acp://session/test')
+        vim.bo[uri_buffer].buflisted = false
+
+        local float_buffer = vim.api.nvim_create_buf(false, true)
+        vim.bo[float_buffer].filetype = 'incline'
+        local float_win = vim.api.nvim_open_win(float_buffer, false, {
+            relative = 'editor',
+            row = 1,
+            col = 1,
+            width = 12,
+            height = 1,
+            style = 'minimal',
+        })
+
+        plugin.setup({
+            state_file = state_file,
+        })
+
+        local saved = plugin.api.capture()
+        local saved_buffers = {}
+
+        for _, buffer in ipairs(saved.state.nvim.buffers or {}) do
+            saved_buffers[buffer.id] = buffer
+        end
+
+        assert.are.equal(1, #saved.state.nvim.tabs[1].windows)
+        assert.are.equal(uri_buffer, saved.state.nvim.tabs[1].windows[1].buffer)
+        assert.is_not_nil(saved_buffers[uri_buffer])
+        assert.is_nil(saved_buffers[float_buffer])
+
+        pcall(vim.api.nvim_win_close, float_win, true)
+    end)
+
     it('can derive the live session id from cwd and Git branch', function()
         local plugin = require('continuity')
         local original_cwd = vim.fn.getcwd()

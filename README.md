@@ -65,6 +65,11 @@ debounced by `continuous.write_debounce_ms`. Named sessions are still saved
 explicitly through `continuity.api.save()`, `continuity.api.capture()`, or
 `:ContinuitySave`.
 
+Continuity keeps `state_file` as a small index and writes full records as
+one JSON file per session under `state_dir`. When only `state_file` is
+overridden, `state_dir` defaults to `state_file .. '.d'`; the built-in default
+uses `stdpath('state')/continuity.nvim/sessions/`.
+
 When this repo is used inside the full workspace, the test suite also exercises real sibling-provider registrations for:
 - `arboretum.nvim + consulate.nvim + terminalia.nvim`
 - `arboretum.nvim + laboratory.nvim + terminalia.nvim`

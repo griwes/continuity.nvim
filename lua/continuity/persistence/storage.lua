@@ -9,23 +9,100 @@ local state = {
     next_id = 1,
     sessions = {},
 }
+local CURRENT_VERSION = 1
+
+local sorted_sessions
 
 ---@return string
 local function state_file()
     return config.get().state_file
 end
 
-local function persist()
-    local path = state_file()
+---@return string
+local function state_dir()
+    local configured = config.get().state_dir
+    if type(configured) == 'string' and configured ~= '' then
+        return configured
+    end
 
+    return string.format('%s.d', state_file())
+end
+
+---@param value string
+---@return string
+local function encode_path_component(value)
+    return value:gsub('[^%w._-]', function(char)
+        return string.format('%%%02X', char:byte())
+    end)
+end
+
+---@param id string
+---@return string
+local function session_filename(id)
+    return string.format('%s.json', encode_path_component(id))
+end
+
+---@param id string
+---@return string
+local function session_path(id)
+    return vim.fs.joinpath(state_dir(), session_filename(id))
+end
+
+---@param path string
+---@param payload table
+local function write_json(path, payload)
     vim.fn.mkdir(vim.fn.fnamemodify(path, ':h'), 'p')
-    vim.fn.writefile({
-        vim.json.encode({
-            last_session_id = state.last_session_id,
-            next_id = state.next_id,
-            sessions = vim.tbl_values(state.sessions),
-        }),
-    }, path)
+    vim.fn.writefile({ vim.json.encode(payload) }, path)
+end
+
+---@param path string
+---@return table?
+local function read_json(path)
+    if vim.fn.filereadable(path) == 0 then
+        return nil
+    end
+
+    local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), '\n'))
+    if not ok or type(decoded) ~= 'table' then
+        return nil
+    end
+
+    return decoded
+end
+
+---@param record continuity.Record
+---@return table
+local function index_entry(record)
+    return {
+        id = record.id,
+        name = record.name,
+        cwd = record.cwd,
+        created_at = record.created_at,
+        updated_at = record.updated_at,
+        file = session_filename(record.id),
+    }
+end
+
+local function persist_index()
+    write_json(state_file(), {
+        version = CURRENT_VERSION,
+        last_session_id = state.last_session_id,
+        next_id = state.next_id,
+        sessions = vim.tbl_map(index_entry, sorted_sessions()),
+    })
+end
+
+---@param record continuity.Record
+local function persist_record(record)
+    write_json(session_path(record.id), record)
+end
+
+local function persist()
+    for _, record in ipairs(sorted_sessions()) do
+        persist_record(record)
+    end
+
+    persist_index()
 end
 
 ---@return string
@@ -36,7 +113,7 @@ local function alloc_id()
 end
 
 ---@return continuity.Record[]
-local function sorted_sessions()
+function sorted_sessions()
     ---@type continuity.Record[]
     local items = vim.tbl_values(state.sessions)
 
@@ -116,6 +193,12 @@ function M.delete(id)
     if state.last_session_id == id then
         state.last_session_id = nil
     end
+
+    local path = session_path(id)
+    if vim.fn.filereadable(path) == 1 then
+        vim.fn.delete(path)
+    end
+
     persist()
     return vim.deepcopy(record)
 end
@@ -131,7 +214,28 @@ function M.clear(opts)
         if vim.fn.filereadable(path) == 1 then
             vim.fn.delete(path)
         end
+
+        local dir = state_dir()
+        if dir ~= '' and dir ~= '/' and vim.fn.isdirectory(dir) == 1 then
+            vim.fn.delete(dir, 'rf')
+        end
     end
+end
+
+---@param entry table
+---@return continuity.Record?
+local function restore_fragment(entry)
+    if type(entry) ~= 'table' or type(entry.id) ~= 'string' or entry.id == '' then
+        return nil
+    end
+
+    local filename = type(entry.file) == 'string' and entry.file or session_filename(entry.id)
+    local decoded = read_json(vim.fs.joinpath(state_dir(), filename))
+    if decoded == nil then
+        return nil
+    end
+
+    return model.restore_record(decoded)
 end
 
 ---@return continuity.Record[]
@@ -143,9 +247,9 @@ function M.restore()
         return {}
     end
 
-    local ok, decoded = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), '\n'))
+    local decoded = read_json(path)
 
-    if not ok or type(decoded) ~= 'table' then
+    if decoded == nil then
         M.clear({ wipe_storage = false })
         return {}
     end
@@ -154,11 +258,12 @@ function M.restore()
     state.next_id = tonumber(decoded.next_id) or 1
     state.sessions = {}
 
-    for _, item in ipairs(decoded.sessions or {}) do
-        local restored = model.restore_record(item)
-
-        if restored ~= nil then
-            state.sessions[restored.id] = restored
+    if decoded.version == CURRENT_VERSION then
+        for _, item in ipairs(decoded.sessions or {}) do
+            local restored = restore_fragment(item)
+            if restored ~= nil then
+                state.sessions[restored.id] = restored
+            end
         end
     end
 

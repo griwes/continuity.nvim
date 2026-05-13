@@ -104,7 +104,7 @@ describe('continuity restore execution', function()
                 table.insert(calls, step.kind)
             end,
         })
-        plugin.api.register_contributor('terminal_manager', {
+        plugin.api.register_contributor('terminalia', {
             restore_phase = 'after_layout',
             restore_after = { 'workspace' },
             plan_restore = function()
@@ -154,7 +154,7 @@ describe('continuity restore execution', function()
             },
             contributors = {
                 workspace = {},
-                terminal_manager = {},
+                terminalia = {},
             },
         })
 
@@ -162,9 +162,101 @@ describe('continuity restore execution', function()
             force_current = true,
         })
 
-        assert.are.same({ 'session:cwd', 'workspace:1', 'terminal_manager:1' }, report.executed_steps)
+        assert.are.same({ 'session:cwd', 'workspace:1', 'terminalia:1' }, report.executed_steps)
         assert.is_true(report.layout_restored)
         assert.are.same({ 'workspace.select', 'terminalia.reopen_terminals:1' }, calls)
+    end)
+
+    it('reasserts restored window buffers after post-layout contributors mutate tabpages', function()
+        local plugin = setup_plugin()
+        local root = vim.fn.tempname()
+        local first = vim.fs.joinpath(root, 'first.txt')
+        local second = vim.fs.joinpath(root, 'second.txt')
+
+        vim.fn.mkdir(root, 'p')
+        vim.fn.writefile({ 'first' }, first)
+        vim.fn.writefile({ 'second' }, second)
+
+        plugin.api.register_contributor('tab_model', {
+            restore_phase = 'after_layout',
+            plan_restore = function()
+                return {
+                    {
+                        kind = 'tab_model.restore',
+                        title = 'Restore tab model',
+                    },
+                }
+            end,
+            restore = function()
+                for _, win in ipairs(vim.api.nvim_list_wins()) do
+                    vim.api.nvim_win_set_buf(win, vim.api.nvim_create_buf(true, false))
+                end
+            end,
+        })
+
+        local saved = plugin.api.save({
+            id = 'post-layout-buffer-rebind',
+            name = 'post-layout-buffer-rebind',
+            cwd = root,
+            state = {
+                nvim = {
+                    buffers = {
+                        {
+                            id = 1,
+                            name = first,
+                            listed = true,
+                            loaded = true,
+                            modified = false,
+                            buftype = '',
+                        },
+                        {
+                            id = 2,
+                            name = second,
+                            listed = true,
+                            loaded = true,
+                            modified = false,
+                            buftype = '',
+                        },
+                    },
+                    tabs = {
+                        {
+                            id = 1,
+                            current = true,
+                            layout = { 'row', { { 'leaf', 1001 }, { 'leaf', 1002 } } },
+                            windows = {
+                                {
+                                    id = 1001,
+                                    buffer = 1,
+                                },
+                                {
+                                    id = 1002,
+                                    buffer = 2,
+                                    current = true,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            contributors = {
+                tab_model = {},
+            },
+        })
+
+        local report = plugin.api.execute_restore(saved.id, {
+            force_current = true,
+        })
+        local visible = {}
+
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+            local name = vim.fs.normalize(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)))
+
+            visible[name] = true
+        end
+
+        assert.is_true(report.layout_restored)
+        assert.is_true(visible[vim.fs.normalize(first)])
+        assert.is_true(visible[vim.fs.normalize(second)])
     end)
 
     it('reports manual restore steps when a contributor has no restore callback', function()
@@ -411,12 +503,7 @@ describe('continuity restore execution', function()
 
         assert.is_true(report.layout_restored)
         assert.are.equal(uri, vim.api.nvim_buf_get_name(0))
-        assert.are.equal(
-            'nofile',
-            vim.api.nvim_get_option_value('buftype', {
-                buf = 0,
-            })
-        )
+        assert.are.equal('nofile', vim.bo[0].buftype)
     end)
 
     it('restores jump and change list contents through synthetic ShaDa', function()
@@ -492,7 +579,7 @@ describe('continuity restore execution', function()
         local plugin = setup_plugin()
         local calls = {}
 
-        plugin.api.register_contributor('terminal_manager', {
+        plugin.api.register_contributor('terminalia', {
             restore_phase = 'after_layout',
             plan_restore = function()
                 return {
@@ -507,7 +594,7 @@ describe('continuity restore execution', function()
             end,
         })
         plugin.api.register_contributor('workspace', {
-            restore_after = { 'terminal_manager' },
+            restore_after = { 'terminalia' },
             plan_restore = function()
                 return {
                     {
@@ -524,7 +611,7 @@ describe('continuity restore execution', function()
         local saved = plugin.api.save({
             name = 'ordered-normalized-cross-phase',
             contributors = {
-                terminal_manager = {},
+                terminalia = {},
                 workspace = {},
             },
         })
@@ -533,7 +620,7 @@ describe('continuity restore execution', function()
             force_current = true,
         })
 
-        assert.are.same({ 'session:cwd', 'terminal_manager:1', 'workspace:1' }, report.executed_steps)
+        assert.are.same({ 'session:cwd', 'terminalia:1', 'workspace:1' }, report.executed_steps)
         assert.are.same({ 'terminalia.reopen_terminals', 'workspace.select' }, calls)
     end)
 

@@ -11,6 +11,7 @@ local state = {
     group_id = nil,
     record = nil,
     timer = nil,
+    suspend_count = 0,
 }
 
 local refresh_builtin_state
@@ -24,6 +25,11 @@ end
 ---@return boolean
 local function enabled()
     return live_config().enabled == true
+end
+
+---@return boolean
+local function suspended()
+    return state.suspend_count > 0
 end
 
 ---@return string
@@ -89,7 +95,7 @@ local function ensure_record()
 end
 
 local function persist_now()
-    if not enabled() or state.record == nil then
+    if not enabled() or suspended() or state.record == nil then
         return
     end
 
@@ -112,7 +118,7 @@ local function refresh_all_state()
 end
 
 local function flush_now()
-    if not enabled() then
+    if not enabled() or suspended() then
         return
     end
 
@@ -122,7 +128,7 @@ local function flush_now()
 end
 
 local function schedule_persist()
-    if not enabled() then
+    if not enabled() or suspended() then
         return
     end
 
@@ -198,7 +204,7 @@ function M.record()
 end
 
 function M.refresh_all()
-    if not enabled() then
+    if not enabled() or suspended() then
         return
     end
 
@@ -208,12 +214,35 @@ end
 
 ---@param name string
 function M.notify_contributor_changed(name)
-    if not enabled() then
+    if not enabled() or suspended() then
         return
     end
 
     refresh_contributor(name)
     schedule_persist()
+end
+
+---@generic T
+---@param callback fun(): T
+---@param opts? { refresh_after?: boolean }
+---@return T
+function M.with_suspended(callback, opts)
+    state.suspend_count = state.suspend_count + 1
+
+    local ok, result = pcall(callback)
+
+    state.suspend_count = math.max(state.suspend_count - 1, 0)
+
+    if opts ~= nil and opts.refresh_after == true and enabled() then
+        refresh_all_state()
+        schedule_persist()
+    end
+
+    if not ok then
+        error(result)
+    end
+
+    return result
 end
 
 local function register_autocmds()
@@ -230,6 +259,7 @@ local function register_autocmds()
         'BufDelete',
         'BufEnter',
         'BufFilePost',
+        'BufWinEnter',
         'BufWritePost',
         'DirChanged',
         'TabClosed',

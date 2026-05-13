@@ -186,7 +186,11 @@ function M.execute_restore(session_ref, opts)
         end
     end
 
-    return restore_execute.execute(vim.deepcopy(record), nil, opts)
+    return live.with_suspended(function()
+        return restore_execute.execute(vim.deepcopy(record), nil, opts)
+    end, {
+        refresh_after = true,
+    })
 end
 
 ---@return continuity.Record?

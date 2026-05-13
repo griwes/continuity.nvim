@@ -166,15 +166,21 @@ function M.execute(record, plan, opts)
     }
     local executed = {}
     local pre_layout_steps, post_layout_steps = partition_steps(resolved_plan.steps)
+    local layout_restored = false
 
     run_steps(report, pre_layout_steps, record, executed, opts)
 
     if opts == nil or opts.restore_layout ~= false then
         validate_external_shada(record)
-        report.layout_restored = layout.restore(record).restored
+        layout_restored = layout.restore(record).restored
+        report.layout_restored = layout_restored
     end
 
     run_steps(report, post_layout_steps, record, executed, opts)
+
+    if layout_restored then
+        layout.rebind_buffers(record)
+    end
 
     return report
 end

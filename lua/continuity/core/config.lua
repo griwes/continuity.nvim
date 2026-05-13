@@ -1,5 +1,6 @@
 ---@class continuity.Config
 ---@field state_file string
+---@field state_dir? string
 ---@field continuous continuity.ContinuousConfig
 ---@field session_key continuity.SessionKeyConfig
 ---@field autoload continuity.AutoloadConfig
@@ -25,8 +26,11 @@
 
 local M = {}
 
+local state_root = vim.fs.joinpath(vim.fn.stdpath('state'), 'continuity.nvim')
+
 local defaults = {
-    state_file = vim.fs.joinpath(vim.fn.stdpath('state'), 'continuity.nvim', 'sessions.json'),
+    state_file = vim.fs.joinpath(state_root, 'sessions.json'),
+    state_dir = vim.fs.joinpath(state_root, 'sessions'),
     continuous = {
         enabled = false,
         session_id = 'session:live',
@@ -63,6 +67,10 @@ local current = vim.deepcopy(defaults)
 ---@return continuity.Config
 function M.set(opts)
     current = vim.tbl_deep_extend('force', vim.deepcopy(defaults), opts or {})
+
+    if opts ~= nil and opts.state_file ~= nil and opts.state_dir == nil then
+        current.state_dir = string.format('%s.d', current.state_file)
+    end
 
     if valid_autoload_policies[current.autoload.policy] ~= true then
         current.autoload.policy = 'disabled'

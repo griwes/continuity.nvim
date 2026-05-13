@@ -69,6 +69,9 @@ local function ensure_buffer(buffer)
     if name ~= nil and buffer.buftype == '' and vim.uv.fs_stat(name) ~= nil then
         local bufnr = vim.fn.bufadd(name)
         pcall(vim.fn.bufload, bufnr)
+        pcall(function()
+            vim.bo[bufnr].buflisted = buffer.listed ~= false
+        end)
         return bufnr
     end
 
@@ -81,15 +84,15 @@ local function ensure_buffer(buffer)
     end
 
     if type(buffer.buftype) == 'string' and buffer.buftype ~= '' then
-        pcall(vim.api.nvim_set_option_value, 'buftype', buffer.buftype, {
-            buf = bufnr,
-        })
+        pcall(function()
+            vim.bo[bufnr].buftype = buffer.buftype
+        end)
     end
 
     if type(buffer.filetype) == 'string' and buffer.filetype ~= '' then
-        pcall(vim.api.nvim_set_option_value, 'filetype', buffer.filetype, {
-            buf = bufnr,
-        })
+        pcall(function()
+            vim.bo[bufnr].filetype = buffer.filetype
+        end)
     end
 
     return bufnr
@@ -114,6 +117,20 @@ local function flatten_layout_windows(layout, out)
     for _, child in ipairs(layout[2] or {}) do
         flatten_layout_windows(child, out)
     end
+end
+
+---@param tabpage integer
+---@return any?
+local function current_layout(tabpage)
+    local wins = vim.api.nvim_tabpage_list_wins(tabpage)
+    local first = wins[1]
+
+    if first == nil or not vim.api.nvim_win_is_valid(first) then
+        return nil
+    end
+
+    local ok, layout = pcall(vim.api.nvim_win_call, first, vim.fn.winlayout)
+    return ok and layout or nil
 end
 
 ---@param tab continuity.TabState
@@ -379,6 +396,46 @@ function M.restore(record)
         end
         if found_current_win then
             break
+        end
+    end
+
+    report.restored = true
+    return report
+end
+
+---@param record continuity.Record
+---@return continuity.LayoutRestoreReport
+function M.rebind_buffers(record)
+    local nvim_state = record.state ~= nil and record.state.nvim or nil
+    local report = {
+        restored = false,
+        windows = {},
+        buffers = {},
+    }
+
+    if not has_tabs(nvim_state) then
+        return report
+    end
+
+    local buffers = buffers_by_saved_id(record)
+    local tabpages = vim.api.nvim_list_tabpages()
+
+    for index, tab in ipairs(nvim_state.tabs or {}) do
+        local tabpage = tabpages[index]
+
+        if tabpage ~= nil and vim.api.nvim_tabpage_is_valid(tabpage) then
+            local saved_order = window_order(tab)
+            local actual_order = {}
+
+            flatten_layout_windows(current_layout(tabpage), actual_order)
+
+            if #saved_order == #actual_order then
+                local saved_windows = windows_by_saved_id(tab)
+
+                for order_index, saved_id in ipairs(saved_order) do
+                    assign_window(actual_order[order_index], saved_windows[saved_id], buffers, report)
+                end
+            end
         end
     end
 

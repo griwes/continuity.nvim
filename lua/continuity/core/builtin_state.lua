@@ -1,4 +1,5 @@
 local M = {}
+local LAST_FILE_BUFFER_VAR = 'continuity_last_file_buffer'
 
 ---@class continuity.BufferState
 ---@field id integer
@@ -65,6 +66,49 @@ local function capture_jumplist(win)
 end
 
 ---@param bufnr integer
+---@return boolean
+local function is_file_buffer(bufnr)
+    if not vim.api.nvim_buf_is_valid(bufnr) or vim.bo[bufnr].buftype ~= '' then
+        return false
+    end
+
+    local name = vim.api.nvim_buf_get_name(bufnr)
+    return name ~= '' and vim.uv.fs_stat(name) ~= nil
+end
+
+---@param bufnr integer
+---@return boolean
+local function is_empty_anonymous_buffer(bufnr)
+    return vim.api.nvim_buf_is_valid(bufnr)
+        and vim.api.nvim_buf_get_name(bufnr) == ''
+        and vim.bo[bufnr].buftype == ''
+        and vim.bo[bufnr].modified == false
+end
+
+---@param win integer
+---@param bufnr integer
+---@return integer
+local function resolve_window_buffer(win, bufnr)
+    if is_file_buffer(bufnr) then
+        pcall(vim.api.nvim_win_set_var, win, LAST_FILE_BUFFER_VAR, bufnr)
+        return bufnr
+    end
+
+    if not is_empty_anonymous_buffer(bufnr) then
+        return bufnr
+    end
+
+    local ok, previous = pcall(vim.api.nvim_win_get_var, win, LAST_FILE_BUFFER_VAR)
+    previous = ok and tonumber(previous) or nil
+
+    if previous ~= nil and is_file_buffer(previous) then
+        return previous
+    end
+
+    return bufnr
+end
+
+---@param bufnr integer
 ---@return table?
 local function capture_changelist(bufnr)
     local ok, value = pcall(vim.fn.getchangelist, bufnr)
@@ -93,30 +137,67 @@ local function capture_layout(tab)
     return ok and layout or nil
 end
 
+---@param layout any
+---@param out table<integer, boolean>
+local function collect_layout_windows(layout, out)
+    if type(layout) ~= 'table' then
+        return
+    end
+
+    if layout[1] == 'leaf' then
+        local win = tonumber(layout[2])
+
+        if win ~= nil then
+            out[win] = true
+        end
+        return
+    end
+
+    for _, child in ipairs(layout[2] or {}) do
+        collect_layout_windows(child, out)
+    end
+end
+
+---@param tabs continuity.TabState[]
+---@return table<integer, boolean>
+local function visible_layout_buffers(tabs)
+    local result = {}
+
+    for _, tab in ipairs(tabs) do
+        for _, window in ipairs(tab.windows or {}) do
+            result[window.buffer] = true
+        end
+    end
+
+    return result
+end
+
+---@param visible_buffers table<integer, boolean>
 ---@return continuity.BufferState[]
-local function capture_buffers()
+local function capture_buffers(visible_buffers)
     local buffers = {}
 
     for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
         if vim.api.nvim_buf_is_valid(buffer) then
-            table.insert(buffers, {
-                id = buffer,
-                name = vim.api.nvim_buf_get_name(buffer),
-                listed = vim.api.nvim_get_option_value('buflisted', {
-                    buf = buffer,
-                }),
-                loaded = vim.api.nvim_buf_is_loaded(buffer),
-                modified = vim.api.nvim_get_option_value('modified', {
-                    buf = buffer,
-                }),
-                buftype = vim.api.nvim_get_option_value('buftype', {
-                    buf = buffer,
-                }),
-                filetype = vim.api.nvim_get_option_value('filetype', {
-                    buf = buffer,
-                }),
-                changelist = capture_changelist(buffer),
-            })
+            local name = vim.api.nvim_buf_get_name(buffer)
+            local listed = vim.bo[buffer].buflisted
+            local buftype = vim.bo[buffer].buftype
+            local visible = visible_buffers[buffer] == true
+            local path_backed_file = buftype == '' and name ~= '' and vim.uv.fs_stat(name) ~= nil
+            local named_or_special = name ~= '' or buftype ~= ''
+
+            if visible or path_backed_file or (listed and named_or_special) then
+                table.insert(buffers, {
+                    id = buffer,
+                    name = name,
+                    listed = listed,
+                    loaded = vim.api.nvim_buf_is_loaded(buffer),
+                    modified = vim.bo[buffer].modified,
+                    buftype = buftype,
+                    filetype = vim.bo[buffer].filetype,
+                    changelist = capture_changelist(buffer),
+                })
+            end
         end
     end
 
@@ -135,23 +216,31 @@ local function capture_tabs()
 
     for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
         local windows = {}
+        local layout = capture_layout(tab)
+        local layout_windows = {}
+
+        collect_layout_windows(layout, layout_windows)
 
         for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-            table.insert(windows, {
-                id = window,
-                buffer = vim.api.nvim_win_get_buf(window),
-                current = window == current_window,
-                width = vim.api.nvim_win_get_width(window),
-                height = vim.api.nvim_win_get_height(window),
-                view = capture_view(window),
-                jumplist = capture_jumplist(window),
-            })
+            if layout_windows[window] == true then
+                local buffer = resolve_window_buffer(window, vim.api.nvim_win_get_buf(window))
+
+                table.insert(windows, {
+                    id = window,
+                    buffer = buffer,
+                    current = window == current_window,
+                    width = vim.api.nvim_win_get_width(window),
+                    height = vim.api.nvim_win_get_height(window),
+                    view = capture_view(window),
+                    jumplist = capture_jumplist(window),
+                })
+            end
         end
 
         table.insert(tabs, {
             id = tab,
             current = tab == current_tab,
-            layout = capture_layout(tab),
+            layout = layout,
             windows = windows,
         })
     end
@@ -161,6 +250,8 @@ end
 
 ---@return continuity.NvimState
 function M.capture()
+    local tabs = capture_tabs()
+
     return {
         cwd = vim.uv.cwd() or vim.fn.getcwd(),
         current = {
@@ -168,8 +259,8 @@ function M.capture()
             window = vim.api.nvim_get_current_win(),
             tab = vim.api.nvim_get_current_tabpage(),
         },
-        buffers = capture_buffers(),
-        tabs = capture_tabs(),
+        buffers = capture_buffers(visible_layout_buffers(tabs)),
+        tabs = tabs,
     }
 end
 

@@ -83,10 +83,18 @@ Continuity stores session metadata at:
 stdpath('state')/continuity.nvim/sessions.json
 ```
 
-The metadata file stores Continuity records, contributor payloads, the last
-session id, and the next sequential id. It does not reuse or import
-persisted.nvim's storage format, so old persisted.nvim session files can be
-kept for rollback while new Continuity records are created.
+That file is only a compact index with session metadata, the last session id,
+and the next sequential id. Full Continuity records, including builtin editor
+state and contributor payloads, are stored one file per session under:
+
+```text
+stdpath('state')/continuity.nvim/sessions/
+```
+
+If a config overrides only `state_file`, Continuity derives the record directory
+as `state_file .. '.d'` so tests and custom setups remain isolated. It does not
+reuse or import persisted.nvim's storage format, so old persisted.nvim session
+files can be kept for rollback while new Continuity records are created.
 
 ## Live Session Semantics
 
@@ -95,8 +103,8 @@ editor autocmds and plugin contributor notifications. With
 `continuous.session_id = 'auto'`, the live session key is derived from the
 current cwd and Git branch.
 
-Live and named sessions use the same JSON substrate. No Vim session files are
-written.
+Live and named sessions use the same fragmented JSON substrate. No Vim session
+files are written.
 
 ## Plugin-Owned State
 

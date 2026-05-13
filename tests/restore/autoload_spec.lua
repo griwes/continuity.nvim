@@ -26,11 +26,41 @@ describe('continuity autoload', function()
     ---@param sessions table[]
     ---@param opts? { last_session_id?: string }
     local function write_state(sessions, opts)
+        local state_dir = string.format('%s.d', state_file)
+        local index_sessions = {}
+
+        vim.fn.mkdir(state_dir, 'p')
+
+        local function encode_path_component(value)
+            return value:gsub('[^%w._-]', function(char)
+                return string.format('%%%02X', char:byte())
+            end)
+        end
+
+        local function session_filename(id)
+            return string.format('%s.json', encode_path_component(id))
+        end
+
+        for _, session in ipairs(sessions) do
+            local filename = session_filename(session.id)
+
+            vim.fn.writefile({ vim.json.encode(session) }, vim.fs.joinpath(state_dir, filename))
+            table.insert(index_sessions, {
+                id = session.id,
+                name = session.name,
+                cwd = session.cwd,
+                created_at = session.created_at,
+                updated_at = session.updated_at,
+                file = filename,
+            })
+        end
+
         vim.fn.writefile({
             vim.json.encode({
+                version = 1,
                 last_session_id = opts and opts.last_session_id or nil,
                 next_id = #sessions + 1,
-                sessions = sessions,
+                sessions = index_sessions,
             }),
         }, state_file)
     end

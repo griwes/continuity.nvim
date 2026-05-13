@@ -14,6 +14,12 @@ describe('session', function()
         return vim.fn.isdirectory(sibling_repo(name)) == 1
     end
 
+    ---@param path string
+    ---@return table
+    local function read_json(path)
+        return vim.json.decode(table.concat(vim.fn.readfile(path), '\n'))
+    end
+
     ---@param names string[]
     local function prepend_runtimepaths(names)
         for _, name in ipairs(names) do
@@ -81,6 +87,39 @@ describe('session', function()
         assert.are.equal('session:2', second.id)
         assert.are.same({ 'session:1', 'session:2' }, { listed[1].id, listed[2].id })
         assert.are.equal('terminal:1', listed[1].state.terminal)
+    end)
+
+    it('persists sessions as a small index plus per-session json records', function()
+        local plugin = require('continuity')
+
+        plugin.api.save({
+            name = 'alpha',
+            state = {
+                large = { 'session-local state' },
+            },
+            contributors = {
+                terminalia = {
+                    terminals = { 'terminal:1' },
+                },
+            },
+        })
+        plugin.api.save({
+            name = 'beta',
+        })
+
+        local index = read_json(state_file)
+        local session_dir = string.format('%s.d', state_file)
+        local first_record = read_json(vim.fs.joinpath(session_dir, 'session%3A1.json'))
+        local second_record = read_json(vim.fs.joinpath(session_dir, 'session%3A2.json'))
+
+        assert.are.equal(1, index.version)
+        assert.are.equal(2, #index.sessions)
+        assert.is_nil(index.sessions[1].state)
+        assert.is_nil(index.sessions[1].contributors)
+        assert.are.equal('session%3A1.json', index.sessions[1].file)
+        assert.are.equal('session-local state', first_record.state.large[1])
+        assert.are.equal('terminal:1', first_record.contributors.terminalia.terminals[1])
+        assert.are.equal('session:2', second_record.id)
     end)
 
     it('derives opt-in session ids from cwd and Git branch', function()
@@ -195,7 +234,7 @@ describe('session', function()
     it('registers contributors and captures their state into saved session records', function()
         local plugin = require('continuity')
 
-        plugin.api.register_contributor('terminal_manager', {
+        plugin.api.register_contributor('terminalia', {
             capture = function()
                 return {
                     terminals = { 'terminal:1' },
@@ -214,15 +253,15 @@ describe('session', function()
             name = 'captured',
         })
 
-        assert.are.same({ 'terminal_manager', 'workspace' }, plugin.api.contributor_names())
-        assert.are.same({ 'terminal:1' }, saved.contributors.terminal_manager.terminals)
+        assert.are.same({ 'terminalia', 'workspace' }, plugin.api.contributor_names())
+        assert.are.same({ 'terminal:1' }, saved.contributors.terminalia.terminals)
         assert.are.equal('/tmp/workspace', saved.contributors.workspace.cwd)
     end)
 
     it('restores contributor-owned session state from disk', function()
         local plugin = require('continuity')
 
-        plugin.api.register_contributor('terminal_manager', {
+        plugin.api.register_contributor('terminalia', {
             capture = function()
                 return {
                     terminals = { 'terminal:1' },
@@ -241,7 +280,7 @@ describe('session', function()
         local restored = plugin.api.restore()
 
         assert.are.equal(saved.id, restored[1].id)
-        assert.are.same({ 'terminal:1' }, restored[1].contributors.terminal_manager.terminals)
+        assert.are.same({ 'terminal:1' }, restored[1].contributors.terminalia.terminals)
     end)
 
     it('plans restore steps from a saved session record', function()
@@ -260,40 +299,6 @@ describe('session', function()
         assert.are.equal('session:cwd', plan.steps[1].id)
         assert.are.equal('continuity.chdir', plan.steps[1].kind)
         assert.are.equal('/tmp/workspace', plan.steps[1].payload.cwd)
-    end)
-
-    it('maps legacy contributor keys onto branded contributors when planning restore', function()
-        local plugin = require('continuity')
-
-        plugin.api.register_contributor('terminalia', {
-            plan_restore = function(captured)
-                return {
-                    {
-                        kind = 'terminalia.reopen_terminals',
-                        payload = captured,
-                    },
-                }
-            end,
-        })
-
-        local plan = plugin.api.plan_restore({
-            id = 'session:legacy',
-            name = 'legacy',
-            cwd = '/tmp/legacy',
-            contributors = {
-                terminal_manager = {
-                    terminals = { 'terminal:1' },
-                },
-            },
-        })
-
-        assert.are.same(
-            { 'session:cwd', 'terminalia:1' },
-            vim.tbl_map(function(step)
-                return step.id
-            end, plan.steps)
-        )
-        assert.are.same({ 'terminal:1' }, plan.steps[2].payload.terminals)
     end)
 
     it('preserves contributor registrations when clearing session state', function()
@@ -331,11 +336,11 @@ describe('session', function()
         assert.are.same({}, plugin.api.contributor_names())
     end)
 
-    it('canonicalizes legacy restore_after names when resolving contributor dependencies', function()
+    it('orders current contributor restore_after names when resolving dependencies', function()
         local plugin = require('continuity')
 
         plugin.api.register_contributor('workspace', {
-            restore_after = { 'terminal_manager' },
+            restore_after = { 'terminalia' },
             plan_restore = function(captured)
                 return {
                     {
@@ -347,7 +352,6 @@ describe('session', function()
             end,
         })
         plugin.api.register_contributor('terminalia', {
-            restore_after = { 'terminal_manager' },
             plan_restore = function()
                 return {
                     {
@@ -363,7 +367,7 @@ describe('session', function()
             cwd = '/tmp/workspace',
             contributors = {
                 workspace = {},
-                terminal_manager = {},
+                terminalia = {},
             },
         })
 
@@ -397,17 +401,17 @@ describe('session', function()
                 }
             end,
         })
-        plugin.api.register_contributor('terminal_manager', {
+        plugin.api.register_contributor('terminalia', {
             restore_after = { 'workspace' },
             plan_restore = function(captured)
                 return {
                     {
-                        kind = 'terminal.restore_context',
+                        kind = 'terminalia.restore_context',
                         title = 'Restore terminal context',
                         payload = captured.current_context_id,
                     },
                     {
-                        kind = 'terminal.restore_buffers',
+                        kind = 'terminalia.restore_buffers',
                         title = 'Reopen terminal buffers',
                         payload = captured.terminals,
                     },
@@ -419,7 +423,7 @@ describe('session', function()
             name = 'ordered',
             cwd = '/tmp/workspace',
             contributors = {
-                terminal_manager = {
+                terminalia = {
                     current_context_id = 'context:demo',
                     terminals = { 'terminalia://demo' },
                 },
@@ -435,8 +439,8 @@ describe('session', function()
             {
                 'session:cwd',
                 'workspace:1',
-                'terminal_manager:1',
-                'terminal_manager:2',
+                'terminalia:1',
+                'terminalia:2',
             },
             vim.tbl_map(function(step)
                 return step.id
@@ -444,7 +448,7 @@ describe('session', function()
         )
         assert.are.same({ 'session:cwd' }, plan.steps[2].depends_on)
         assert.are.same({ 'session:cwd', 'workspace:1' }, plan.steps[3].depends_on)
-        assert.are.same({ 'terminal_manager:1' }, plan.steps[4].depends_on)
+        assert.are.same({ 'terminalia:1' }, plan.steps[4].depends_on)
     end)
 
     it('keeps captured contributors without restore planners visible as manual steps', function()
