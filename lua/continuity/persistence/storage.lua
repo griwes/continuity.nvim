@@ -1,5 +1,4 @@
 local config = require('continuity.core.config')
-local mksession = require('continuity.persistence.mksession')
 local model = require('continuity.core.model')
 local session_key = require('continuity.core.session_key')
 
@@ -57,7 +56,6 @@ function M.save(record)
     state.sessions[restored.id] = restored
     state.last_session_id = restored.id
     persist()
-    mksession.capture(restored.id)
     return vim.deepcopy(restored)
 end
 
@@ -119,7 +117,6 @@ function M.delete(id)
         state.last_session_id = nil
     end
     persist()
-    mksession.delete(id)
     return vim.deepcopy(record)
 end
 
@@ -134,7 +131,6 @@ function M.clear(opts)
         if vim.fn.filereadable(path) == 1 then
             vim.fn.delete(path)
         end
-        mksession.clear_all()
     end
 end
 

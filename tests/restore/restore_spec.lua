@@ -22,48 +22,74 @@ describe('continuity restore execution', function()
         end
     end
 
-    before_each(function()
+    local function reset_modules()
         package.loaded.continuity = nil
         package.loaded['continuity.api'] = nil
+        package.loaded['continuity.core.builtin_state'] = nil
         package.loaded['continuity.core.config'] = nil
         package.loaded['continuity.contributors.registry'] = nil
         package.loaded['continuity.core.model'] = nil
         package.loaded['continuity.live.state'] = nil
-        package.loaded['continuity.persistence.mksession'] = nil
+        package.loaded['continuity.persistence.shada'] = nil
+        package.loaded['continuity.restore.layout'] = nil
         package.loaded['continuity.restore.plan'] = nil
         package.loaded['continuity.restore.execute'] = nil
         package.loaded['continuity.persistence.storage'] = nil
+    end
 
-        state_file = vim.fn.tempname()
-
+    local function setup_plugin(opts)
         local plugin = require('continuity')
-        plugin.setup({
+
+        plugin.setup(vim.tbl_deep_extend('force', {
             state_file = state_file,
-        })
+            shada = {
+                external_policy = 'ignore',
+            },
+        }, opts or {}))
         plugin.api.clear()
+
+        return plugin
+    end
+
+    ---@param layout any
+    ---@return any
+    local function layout_buffer_names(layout)
+        if type(layout) ~= 'table' then
+            return layout
+        end
+
+        if layout[1] == 'leaf' then
+            local win = tonumber(layout[2])
+            local name = win ~= nil and vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)) or ''
+
+            return { 'leaf', vim.fs.basename(name) }
+        end
+
+        local children = {}
+        for _, child in ipairs(layout[2] or {}) do
+            table.insert(children, layout_buffer_names(child))
+        end
+
+        return { layout[1], children }
+    end
+
+    before_each(function()
+        reset_modules()
+        state_file = vim.fn.tempname()
+        setup_plugin()
+        vim.cmd('silent! tabonly!')
+        vim.cmd('silent! only!')
+        vim.cmd('enew!')
     end)
 
-    it('executes restore steps through contributor-owned restore callbacks in order', function()
-        local plugin = require('continuity')
+    it('executes restore steps through contributor-owned restore callbacks around layout restore', function()
+        local plugin = setup_plugin()
         local calls = {}
         local root = vim.fn.tempname()
-        local original_mksession = package.loaded['continuity.persistence.mksession']
+        local file = vim.fs.joinpath(root, 'target.txt')
 
         vim.fn.mkdir(root, 'p')
-
-        package.loaded['continuity.persistence.mksession'] = {
-            load = function(id)
-                table.insert(calls, 'mksession:' .. id)
-                return true
-            end,
-            capture = function() end,
-            delete = function() end,
-            clear_all = function() end,
-        }
-
-        package.loaded['continuity.restore.execute'] = nil
-        package.loaded['continuity.api'] = nil
-        plugin.api = require('continuity.api')
+        vim.fn.writefile({ 'target' }, file)
 
         plugin.api.register_contributor('workspace', {
             plan_restore = function()
@@ -79,7 +105,7 @@ describe('continuity restore execution', function()
             end,
         })
         plugin.api.register_contributor('terminal_manager', {
-            restore_phase = 'after_mksession',
+            restore_phase = 'after_layout',
             restore_after = { 'workspace' },
             plan_restore = function()
                 return {
@@ -90,33 +116,59 @@ describe('continuity restore execution', function()
                 }
             end,
             restore = function(step)
-                table.insert(calls, step.kind)
+                table.insert(calls, step.kind .. ':' .. #vim.api.nvim_list_wins())
             end,
         })
 
         local saved = plugin.api.save({
-            name = 'restore',
+            id = 'restore-order',
+            name = 'restore-order',
             cwd = root,
+            state = {
+                nvim = {
+                    buffers = {
+                        {
+                            id = 1,
+                            name = file,
+                            listed = true,
+                            loaded = true,
+                            modified = false,
+                            buftype = '',
+                        },
+                    },
+                    tabs = {
+                        {
+                            id = 1,
+                            current = true,
+                            layout = { 'leaf', 1001 },
+                            windows = {
+                                {
+                                    id = 1001,
+                                    buffer = 1,
+                                    current = true,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
             contributors = {
                 workspace = {},
                 terminal_manager = {},
             },
         })
 
-        local report = plugin.api.execute_restore(saved.id)
-
-        package.loaded['continuity.persistence.mksession'] = original_mksession
-        package.loaded['continuity.restore.execute'] = nil
-        package.loaded['continuity.api'] = nil
-        package.loaded.continuity.api = require('continuity.api')
+        local report = plugin.api.execute_restore(saved.id, {
+            force_current = true,
+        })
 
         assert.are.same({ 'session:cwd', 'workspace:1', 'terminal_manager:1' }, report.executed_steps)
-        assert.is_true(report.mksession_loaded)
-        assert.are.same({ 'workspace.select', 'mksession:' .. saved.id, 'terminalia.reopen_terminals' }, calls)
+        assert.is_true(report.layout_restored)
+        assert.are.same({ 'workspace.select', 'terminalia.reopen_terminals:1' }, calls)
     end)
 
     it('reports manual restore steps when a contributor has no restore callback', function()
-        local plugin = require('continuity')
+        local plugin = setup_plugin()
         local root = vim.fn.tempname()
 
         vim.fn.mkdir(root, 'p')
@@ -141,218 +193,307 @@ describe('continuity restore execution', function()
         })
 
         local report = plugin.api.execute_restore(saved.id, {
-            use_mksession = false,
+            force_current = true,
         })
 
         assert.are.same({ 'session:cwd' }, report.executed_steps)
         assert.are.equal(1, #report.manual_steps)
         assert.are.equal('consulate.use', report.manual_steps[1].kind)
-        assert.is_false(report.mksession_loaded)
     end)
 
-    it('writes an mksession substrate file when enabled', function()
-        local plugin = require('continuity')
-        local session_file = vim.fs.joinpath(vim.fn.tempname(), 'views')
-
-        plugin.setup({
-            state_file = state_file,
-            mksession = {
-                enabled = true,
-                dir = session_file,
-            },
-        })
-
-        local saved = plugin.api.save({
-            name = 'with-mksession',
-        })
-        local mksession = require('continuity.persistence.mksession')
-
-        assert.are.equal(1, vim.fn.filereadable(mksession.path(saved.id)))
-    end)
-
-    it('captures mksession with configured dogfood sessionoptions without mutating the ambient option', function()
-        local plugin = require('continuity')
-        local session_dir = vim.fs.joinpath(vim.fn.tempname(), 'views')
+    it('captures and restores builtin layout for named saves without continuous mode', function()
+        local plugin = setup_plugin()
         local root = vim.fn.tempname()
         local first = vim.fs.joinpath(root, 'first.txt')
         local second = vim.fs.joinpath(root, 'second.txt')
-        local original_sessionoptions = vim.o.sessionoptions
+
+        vim.fn.mkdir(root, 'p')
+        vim.fn.writefile({ 'first' }, first)
+        vim.fn.writefile({ 'second' }, second)
+        vim.api.nvim_set_current_dir(root)
+
+        vim.cmd.edit(vim.fn.fnameescape(first))
+        vim.cmd('belowright split')
+        vim.cmd.edit(vim.fn.fnameescape(second))
+        vim.cmd('resize 5')
+
+        local saved = plugin.api.capture({
+            id = 'structured-split',
+            name = 'structured-split',
+            cwd = root,
+        })
+
+        assert.is_not_nil(saved.state.nvim)
+
+        vim.cmd('silent! tabonly!')
+        vim.cmd('silent! only!')
+        vim.cmd('enew!')
+
+        local report = plugin.api.execute_restore(saved.id, {
+            force_current = true,
+        })
+        local visible = {}
+        local heights = {}
+
+        for _, win in ipairs(vim.api.nvim_list_wins()) do
+            local name = vim.fs.normalize(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)))
+
+            visible[name] = true
+            table.insert(heights, vim.api.nvim_win_get_height(win))
+        end
+
+        table.sort(heights)
+
+        assert.is_true(report.layout_restored)
+        assert.are.equal(2, #vim.api.nvim_list_wins())
+        assert.is_true(visible[vim.fs.normalize(first)])
+        assert.is_true(visible[vim.fs.normalize(second)])
+        assert.is_true(heights[1] < heights[2])
+    end)
+
+    it('restores nested mixed-axis split trees without flattening sibling regions', function()
+        local plugin = setup_plugin()
+        local root = vim.fn.tempname()
+        local left_top = vim.fs.joinpath(root, 'left-top.txt')
+        local left_bottom = vim.fs.joinpath(root, 'left-bottom.txt')
+        local right = vim.fs.joinpath(root, 'right.txt')
+
+        vim.fn.mkdir(root, 'p')
+        vim.fn.writefile({ 'left-top' }, left_top)
+        vim.fn.writefile({ 'left-bottom' }, left_bottom)
+        vim.fn.writefile({ 'right' }, right)
+
+        vim.cmd.edit(vim.fn.fnameescape(left_top))
+        vim.cmd.vsplit(vim.fn.fnameescape(right))
+        vim.cmd.wincmd('h')
+        vim.cmd.split(vim.fn.fnameescape(left_bottom))
+
+        local saved = plugin.api.capture({
+            id = 'nested-layout',
+            name = 'nested-layout',
+            cwd = root,
+        })
+        local saved_shape = layout_buffer_names(saved.state.nvim.tabs[1].layout)
+
+        vim.cmd('silent! tabonly!')
+        vim.cmd('silent! only!')
+        vim.cmd('enew!')
+
+        local report = plugin.api.execute_restore(saved.id, {
+            force_current = true,
+        })
+        local restored_shape = layout_buffer_names(vim.fn.winlayout())
+
+        assert.is_true(report.layout_restored)
+        assert.are.same(saved_shape, restored_shape)
+    end)
+
+    it('restores captured hidden listed buffers even when they are not visible in a window', function()
+        local plugin = setup_plugin()
+        local root = vim.fn.tempname()
+        local visible = vim.fs.joinpath(root, 'visible.txt')
+        local hidden = vim.fs.joinpath(root, 'hidden.txt')
+
+        vim.fn.mkdir(root, 'p')
+        vim.fn.writefile({ 'visible' }, visible)
+        vim.fn.writefile({ 'hidden' }, hidden)
+
+        vim.cmd.edit(vim.fn.fnameescape(visible))
+        local hidden_buf = vim.fn.bufadd(hidden)
+        vim.fn.bufload(hidden_buf)
+
+        local saved = plugin.api.capture({
+            id = 'hidden-buffer',
+            name = 'hidden-buffer',
+            cwd = root,
+        })
+
+        for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+            pcall(vim.api.nvim_buf_delete, bufnr, {
+                force = true,
+            })
+        end
+        vim.cmd('enew!')
+
+        local report = plugin.api.execute_restore(saved.id, {
+            force_current = true,
+        })
+        local found_hidden = false
+
+        for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+            if vim.fs.normalize(vim.api.nvim_buf_get_name(bufnr)) == vim.fs.normalize(hidden) then
+                found_hidden = true
+                break
+            end
+        end
+
+        assert.is_true(report.layout_restored)
+        assert.is_true(found_hidden)
+    end)
+
+    it('restores structured tabs and the selected tab', function()
+        local plugin = setup_plugin({
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 0,
+            },
+        })
+        local root = vim.fn.tempname()
+        local first = vim.fs.joinpath(root, 'first.txt')
+        local second = vim.fs.joinpath(root, 'second.txt')
 
         vim.fn.mkdir(root, 'p')
         vim.fn.writefile({ 'first' }, first)
         vim.fn.writefile({ 'second' }, second)
 
-        local ok, err = pcall(function()
-            vim.o.sessionoptions = 'buffers,curdir'
+        vim.cmd.edit(vim.fn.fnameescape(first))
+        vim.cmd.tabnew(vim.fn.fnameescape(second))
 
-            plugin.setup({
-                state_file = state_file,
-                mksession = {
-                    enabled = true,
-                    dir = session_dir,
-                    sessionoptions = {
-                        'blank',
-                        'buffers',
-                        'curdir',
-                        'folds',
-                        'help',
-                        'tabpages',
-                        'winsize',
-                        'winpos',
-                        'terminal',
-                        'globals',
-                    },
-                },
-            })
+        local saved = plugin.api.capture({
+            id = 'structured-tabs',
+            name = 'structured-tabs',
+            cwd = root,
+        })
 
-            vim.api.nvim_set_current_dir(root)
-            vim.cmd('silent! tabonly!')
-            vim.cmd.edit(vim.fn.fnameescape(first))
-            vim.cmd.tabnew(vim.fn.fnameescape(second))
-
-            local saved = plugin.api.save({
-                name = 'dogfood-sessionoptions',
-                cwd = root,
-            })
-
-            assert.are.equal('buffers,curdir', vim.o.sessionoptions)
-
-            vim.cmd('silent! tabonly!')
-            vim.cmd('enew!')
-
-            local report = plugin.api.execute_restore(saved.id)
-
-            assert.is_true(report.mksession_loaded)
-            assert.are.equal(root, vim.fn.getcwd())
-            assert.is_true(#vim.api.nvim_list_tabpages() >= 2)
-        end)
-
-        vim.o.sessionoptions = original_sessionoptions
         vim.cmd('silent! tabonly!')
+        vim.cmd('enew!')
 
-        if not ok then
-            error(err)
-        end
+        local report = plugin.api.execute_restore(saved.id, {
+            force_current = true,
+        })
+
+        assert.is_true(report.layout_restored)
+        assert.are.equal(2, #vim.api.nvim_list_tabpages())
+        assert.are.equal(vim.fs.normalize(second), vim.fs.normalize(vim.api.nvim_buf_get_name(0)))
     end)
 
-    it('accepts comma-separated mksession sessionoptions strings', function()
-        local plugin = require('continuity')
-        local session_dir = vim.fs.joinpath(vim.fn.tempname(), 'views')
-        local original_sessionoptions = vim.o.sessionoptions
+    it('restores URI-named nofile buffers as structured placeholders', function()
+        local plugin = setup_plugin()
+        local uri = 'legate://session/demo'
 
-        local ok, err = pcall(function()
-            vim.o.sessionoptions = 'buffers,curdir'
-
-            plugin.setup({
-                state_file = state_file,
-                mksession = {
-                    enabled = true,
-                    dir = session_dir,
-                    sessionoptions = 'blank,buffers,curdir,tabpages',
+        local saved = plugin.api.save({
+            id = 'uri-buffer',
+            name = 'uri-buffer',
+            state = {
+                nvim = {
+                    buffers = {
+                        {
+                            id = 1,
+                            name = uri,
+                            listed = true,
+                            loaded = true,
+                            modified = false,
+                            buftype = 'nofile',
+                            filetype = 'legate',
+                        },
+                    },
+                    tabs = {
+                        {
+                            id = 1,
+                            current = true,
+                            layout = { 'leaf', 1001 },
+                            windows = {
+                                {
+                                    id = 1001,
+                                    buffer = 1,
+                                    current = true,
+                                },
+                            },
+                        },
+                    },
                 },
+            },
+        })
+
+        local report = plugin.api.execute_restore(saved.id, {
+            force_current = true,
+        })
+
+        assert.is_true(report.layout_restored)
+        assert.are.equal(uri, vim.api.nvim_buf_get_name(0))
+        assert.are.equal(
+            'nofile',
+            vim.api.nvim_get_option_value('buftype', {
+                buf = 0,
             })
-
-            local saved = plugin.api.save({
-                name = 'string-sessionoptions',
-            })
-            local mksession = require('continuity.persistence.mksession')
-
-            assert.are.equal(1, vim.fn.filereadable(mksession.path(saved.id)))
-            assert.are.equal('buffers,curdir', vim.o.sessionoptions)
-        end)
-
-        vim.o.sessionoptions = original_sessionoptions
-
-        if not ok then
-            error(err)
-        end
+        )
     end)
 
-    it('restores ambient sessionoptions when configured sessionoptions fail', function()
-        local plugin = require('continuity')
-        local original_sessionoptions = vim.o.sessionoptions
-
-        local ok, err = pcall(function()
-            vim.o.sessionoptions = 'buffers,curdir'
-
-            plugin.setup({
-                state_file = state_file,
-                mksession = {
-                    enabled = true,
-                    dir = vim.fs.joinpath(vim.fn.tempname(), 'views'),
-                    sessionoptions = 'not-a-real-session-option',
-                },
-            })
-
-            local saved_ok = pcall(function()
-                plugin.api.save({
-                    name = 'bad-sessionoptions',
-                })
-            end)
-
-            assert.is_false(saved_ok)
-            assert.are.equal('buffers,curdir', vim.o.sessionoptions)
-        end)
-
-        vim.o.sessionoptions = original_sessionoptions
-
-        if not ok then
-            error(err)
-        end
-    end)
-
-    it('replays worktree and remote contributors before mksession and Terminalia reopen', function()
-        local plugin = require('continuity')
+    it('restores jump and change list contents through synthetic ShaDa', function()
+        local plugin = setup_plugin()
         local root = vim.fn.tempname()
-        local calls = {}
-        local original_mksession = package.loaded['continuity.persistence.mksession']
+        local file = vim.fs.joinpath(root, 'target.txt')
 
         vim.fn.mkdir(root, 'p')
+        vim.fn.writefile({ 'one', 'two', 'three' }, file)
 
-        package.loaded['continuity.persistence.mksession'] = {
-            load = function(id)
-                table.insert(calls, 'mksession:' .. id)
-                return true
-            end,
-            capture = function() end,
-            delete = function() end,
-            clear_all = function() end,
-        }
-
-        package.loaded['continuity.restore.execute'] = nil
-        package.loaded['continuity.api'] = nil
-        plugin.api = require('continuity.api')
-
-        plugin.api.register_contributor('git_worktree', {
-            plan_restore = function()
-                return {
-                    {
-                        kind = 'arboretum.switch',
-                        title = 'Switch worktree',
+        local saved = plugin.api.save({
+            id = 'shada-restore',
+            name = 'shada-restore',
+            state = {
+                nvim = {
+                    buffers = {
+                        {
+                            id = 1,
+                            name = file,
+                            listed = true,
+                            loaded = true,
+                            modified = false,
+                            buftype = '',
+                            changelist = {
+                                items = {
+                                    {
+                                        lnum = 2,
+                                        col = 0,
+                                    },
+                                },
+                            },
+                        },
                     },
-                }
-            end,
-            restore = function(step)
-                table.insert(calls, step.kind)
-            end,
-        })
-        plugin.api.register_contributor('remote_workspace', {
-            restore_after = { 'git_worktree' },
-            plan_restore = function()
-                return {
-                    {
-                        kind = 'consulate.use',
-                        title = 'Select remote workspace',
+                    tabs = {
+                        {
+                            id = 1,
+                            current = true,
+                            layout = { 'leaf', 1001 },
+                            windows = {
+                                {
+                                    id = 1001,
+                                    buffer = 1,
+                                    current = true,
+                                    jumplist = {
+                                        items = {
+                                            {
+                                                filename = file,
+                                                lnum = 3,
+                                                col = 0,
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
                     },
-                }
-            end,
-            restore = function(step)
-                table.insert(calls, step.kind)
-            end,
+                },
+            },
         })
+
+        local report = plugin.api.execute_restore(saved.id, {
+            force_current = true,
+        })
+        local jumps = vim.fn.getjumplist()[1]
+        local changes = vim.fn.getchangelist(vim.api.nvim_get_current_buf())[1]
+
+        assert.is_true(report.layout_restored)
+        assert.are.equal(3, jumps[#jumps].lnum)
+        assert.are.equal(2, changes[#changes].lnum)
+    end)
+
+    it('normalizes after-layout dependency edges to avoid ordering failures', function()
+        local plugin = setup_plugin()
+        local calls = {}
+
         plugin.api.register_contributor('terminal_manager', {
-            restore_phase = 'after_mksession',
-            restore_after = { 'git_worktree', 'remote_workspace' },
+            restore_phase = 'after_layout',
             plan_restore = function()
                 return {
                     {
@@ -365,470 +506,35 @@ describe('continuity restore execution', function()
                 table.insert(calls, step.kind)
             end,
         })
+        plugin.api.register_contributor('workspace', {
+            restore_after = { 'terminal_manager' },
+            plan_restore = function()
+                return {
+                    {
+                        kind = 'workspace.select',
+                        title = 'Select workspace',
+                    },
+                }
+            end,
+            restore = function(step)
+                table.insert(calls, step.kind)
+            end,
+        })
 
         local saved = plugin.api.save({
-            name = 'ordered-integration',
-            cwd = root,
+            name = 'ordered-normalized-cross-phase',
             contributors = {
-                git_worktree = {},
-                remote_workspace = {},
                 terminal_manager = {},
-            },
-        })
-
-        local report = plugin.api.execute_restore(saved.id)
-
-        package.loaded['continuity.persistence.mksession'] = original_mksession
-        package.loaded['continuity.restore.execute'] = nil
-        package.loaded['continuity.api'] = nil
-        package.loaded.continuity.api = require('continuity.api')
-
-        assert.are.same({
-            'session:cwd',
-            'git_worktree:1',
-            'remote_workspace:1',
-            'terminal_manager:1',
-        }, report.executed_steps)
-        assert.are.same({
-            'arboretum.switch',
-            'consulate.use',
-            'mksession:' .. saved.id,
-            'terminalia.reopen_terminals',
-        }, calls)
-    end)
-
-    it('preserves contributor ordering when mksession is disabled', function()
-        local plugin = require('continuity')
-        local root = vim.fn.tempname()
-        local calls = {}
-
-        vim.fn.mkdir(root, 'p')
-
-        plugin.api.register_contributor('git_worktree', {
-            plan_restore = function()
-                return {
-                    {
-                        kind = 'arboretum.switch',
-                        title = 'Switch worktree',
-                    },
-                }
-            end,
-            restore = function(step)
-                table.insert(calls, step.kind)
-            end,
-        })
-        plugin.api.register_contributor('terminal_manager', {
-            restore_phase = 'after_mksession',
-            restore_after = { 'git_worktree' },
-            plan_restore = function()
-                return {
-                    {
-                        kind = 'terminalia.reopen_terminals',
-                        title = 'Reopen terminals',
-                    },
-                }
-            end,
-            restore = function(step)
-                table.insert(calls, step.kind)
-            end,
-        })
-
-        local saved = plugin.api.save({
-            name = 'ordered-no-mksession',
-            cwd = root,
-            contributors = {
-                git_worktree = {},
-                terminal_manager = {},
+                workspace = {},
             },
         })
 
         local report = plugin.api.execute_restore(saved.id, {
-            use_mksession = false,
+            force_current = true,
         })
 
-        assert.are.same({ 'session:cwd', 'git_worktree:1', 'terminal_manager:1' }, report.executed_steps)
-        assert.are.same({ 'arboretum.switch', 'terminalia.reopen_terminals' }, calls)
-        assert.is_false(report.mksession_loaded)
-    end)
-
-    it('uses contributor restore phases instead of contributor names to place post-mksession work', function()
-        local plugin = require('continuity')
-        local root = vim.fn.tempname()
-        local calls = {}
-        local original_mksession = package.loaded['continuity.persistence.mksession']
-
-        vim.fn.mkdir(root, 'p')
-
-        package.loaded['continuity.persistence.mksession'] = {
-            load = function(id)
-                table.insert(calls, 'mksession:' .. id)
-                return true
-            end,
-            capture = function() end,
-            delete = function() end,
-            clear_all = function() end,
-        }
-
-        package.loaded['continuity.restore.execute'] = nil
-        package.loaded['continuity.api'] = nil
-        plugin.api = require('continuity.api')
-
-        plugin.api.register_contributor('alpha', {
-            plan_restore = function()
-                return {
-                    {
-                        kind = 'alpha.restore',
-                        title = 'Alpha',
-                    },
-                }
-            end,
-            restore = function(step)
-                table.insert(calls, step.kind)
-            end,
-        })
-        plugin.api.register_contributor('omega', {
-            restore_phase = 'after_mksession',
-            restore_after = { 'alpha' },
-            plan_restore = function()
-                return {
-                    {
-                        kind = 'omega.restore',
-                        title = 'Omega',
-                    },
-                }
-            end,
-            restore = function(step)
-                table.insert(calls, step.kind)
-            end,
-        })
-
-        local saved = plugin.api.save({
-            name = 'phase-driven',
-            cwd = root,
-            contributors = {
-                alpha = {},
-                omega = {},
-            },
-        })
-
-        local report = plugin.api.execute_restore(saved.id)
-
-        package.loaded['continuity.persistence.mksession'] = original_mksession
-        package.loaded['continuity.restore.execute'] = nil
-        package.loaded['continuity.api'] = nil
-        package.loaded.continuity.api = require('continuity.api')
-
-        assert.are.same({ 'session:cwd', 'alpha:1', 'omega:1' }, report.executed_steps)
-        assert.are.same({ 'alpha.restore', 'mksession:' .. saved.id, 'omega.restore' }, calls)
-    end)
-
-    it('integrates real workspace providers for worktree plus remote restore execution when available', function()
-        if
-            not repo_exists('arboretum.nvim')
-            or not repo_exists('consulate.nvim')
-            or not repo_exists('terminalia.nvim')
-        then
-            assert.is_true(true)
-            return
-        end
-
-        prepend_runtimepaths({
-            'terminalia.nvim',
-            'arboretum.nvim',
-            'consulate.nvim',
-        })
-
-        package.loaded.arboretum = nil
-        package.loaded['arboretum.api'] = nil
-        package.loaded.consulate = nil
-        package.loaded['consulate.api'] = nil
-        package.loaded.terminalia = nil
-        package.loaded['terminalia.api'] = nil
-
-        require('terminalia').setup({
-            history_dir = vim.fn.tempname(),
-            notify_on_exit = false,
-            persist_terminals = false,
-            state_file = vim.fn.tempname(),
-        })
-
-        require('arboretum').setup({
-            notify = false,
-            system_runner = function()
-                error('unexpected git invocation in session integration test')
-            end,
-        })
-
-        require('consulate').setup({})
-
-        local calls = {}
-        local original_switch = arboretum.api.switch
-        local original_set_current = consulate.api.set_current
-        local original_reopen_terminal = consulate.api.reopen_terminal
-        local original_open_uri = terminalia.api.open_uri
-
-        arboretum.api.switch = function(options)
-            table.insert(calls, {
-                kind = 'arboretum.switch',
-                value = options.path,
-            })
-            return {
-                target = {
-                    path = options.path,
-                },
-            }
-        end
-        consulate.api.set_current = function(item)
-            table.insert(calls, {
-                kind = 'consulate.use',
-                value = item.id,
-            })
-            return item
-        end
-        consulate.api.reopen_terminal = function(id, opts)
-            table.insert(calls, {
-                kind = 'consulate.reopen_terminals',
-                value = id,
-                view = opts.view,
-            })
-            return {
-                id = 'remote:' .. id,
-            }
-        end
-        terminalia.api.open_uri = function(uri, opts)
-            table.insert(calls, {
-                kind = 'terminalia.reopen_terminals',
-                value = uri,
-                view = opts.view,
-            })
-            return {
-                id = 'terminal:restored',
-            }
-        end
-
-        local root = vim.fn.tempname()
-        vim.fn.mkdir(root, 'p')
-
-        local terminal_uri = require('terminalia.uri').encode_terminal_uri({
-            id = 'terminal:1',
-            name = 'build',
-            context_id = 'context:host',
-        })
-
-        local saved = plugin.api.save({
-            name = 'workspace-integration',
-            cwd = root,
-            contributors = {
-                arboretum = {
-                    current = {
-                        path = '/repo/feature',
-                        branch_ref = 'refs/heads/feature/demo',
-                    },
-                },
-                consulate = {
-                    current = {
-                        id = 'ssh|devbox|/repo|/srv/project',
-                        name = 'project-ssh',
-                        host = 'devbox',
-                    },
-                    linked_terminals = {
-                        {
-                            id = 'remoteterminal:1',
-                            view = 'float',
-                        },
-                    },
-                },
-                terminalia = {
-                    current_context_id = 'context:remote',
-                    terminals = {
-                        {
-                            uri = terminal_uri,
-                            preferred_view = 'float',
-                        },
-                    },
-                },
-            },
-        })
-
-        local report = plugin.api.execute_restore(saved.id, {
-            use_mksession = false,
-        })
-
-        arboretum.api.switch = original_switch
-        consulate.api.set_current = original_set_current
-        consulate.api.reopen_terminal = original_reopen_terminal
-        terminalia.api.open_uri = original_open_uri
-
-        assert.are.same({ 'arboretum', 'consulate', 'terminalia' }, plugin.api.contributor_names())
-        assert.are.same({
-            'session:cwd',
-            'arboretum:1',
-            'consulate:1',
-            'consulate:2',
-            'terminalia:1',
-        }, report.executed_steps)
-        assert.are.same({
-            { kind = 'arboretum.switch', value = '/repo/feature' },
-            { kind = 'consulate.use', value = 'ssh|devbox|/repo|/srv/project' },
-            { kind = 'consulate.reopen_terminals', value = 'remoteterminal:1', view = 'float' },
-            { kind = 'terminalia.reopen_terminals', value = terminal_uri, view = 'float' },
-        }, calls)
-    end)
-
-    it('integrates real workspace providers for worktree plus devcontainer restore execution when available', function()
-        if
-            not repo_exists('arboretum.nvim')
-            or not repo_exists('laboratory.nvim')
-            or not repo_exists('terminalia.nvim')
-        then
-            assert.is_true(true)
-            return
-        end
-
-        prepend_runtimepaths({
-            'terminalia.nvim',
-            'arboretum.nvim',
-            'laboratory.nvim',
-        })
-
-        package.loaded.arboretum = nil
-        package.loaded['arboretum.api'] = nil
-        package.loaded.laboratory = nil
-        package.loaded['laboratory.api'] = nil
-        package.loaded.terminalia = nil
-        package.loaded['terminalia.api'] = nil
-
-        require('terminalia').setup({
-            history_dir = vim.fn.tempname(),
-            notify_on_exit = false,
-            persist_terminals = false,
-            state_file = vim.fn.tempname(),
-        })
-
-        require('arboretum').setup({
-            notify = false,
-            system_runner = function()
-                error('unexpected git invocation in session integration test')
-            end,
-        })
-
-        require('laboratory').setup({})
-
-        local calls = {}
-        local original_switch = arboretum.api.switch
-        local original_set_current = laboratory.api.set_current
-        local original_open_terminal = laboratory.api.open_terminal
-        local original_open_uri = terminalia.api.open_uri
-
-        arboretum.api.switch = function(options)
-            table.insert(calls, {
-                kind = 'arboretum.switch',
-                value = options.path,
-            })
-            return {
-                target = {
-                    path = options.path,
-                },
-            }
-        end
-        laboratory.api.set_current = function(item)
-            table.insert(calls, {
-                kind = 'laboratory.select',
-                value = item.id,
-            })
-            return item
-        end
-        laboratory.api.open_terminal = function(id, opts)
-            table.insert(calls, {
-                kind = 'laboratory.reopen_terminals',
-                value = id,
-                view = opts.view,
-            })
-            return {
-                id = 'dev:' .. id,
-            }
-        end
-        terminalia.api.open_uri = function(uri, opts)
-            table.insert(calls, {
-                kind = 'terminalia.reopen_terminals',
-                value = uri,
-                view = opts.view,
-            })
-            return {
-                id = 'terminal:restored',
-            }
-        end
-
-        local root = vim.fn.tempname()
-        vim.fn.mkdir(root, 'p')
-
-        local terminal_uri = require('terminalia.uri').encode_terminal_uri({
-            id = 'terminal:9',
-            name = 'build',
-            context_id = 'context:host',
-        })
-
-        local saved = plugin.api.save({
-            name = 'workspace-devcontainer-integration',
-            cwd = root,
-            contributors = {
-                arboretum = {
-                    current = {
-                        path = '/repo/feature',
-                        branch_ref = 'refs/heads/feature/demo',
-                    },
-                },
-                laboratory = {
-                    current = {
-                        id = 'devcontainer:workspace',
-                        name = 'workspace',
-                        config_path = '/repo/.devcontainer/laboratory.json',
-                    },
-                    linked_terminals = {
-                        {
-                            id = 'devcontainerterminal:1',
-                            view = 'float',
-                        },
-                    },
-                },
-                terminalia = {
-                    current_context_id = 'context:dev',
-                    terminals = {
-                        {
-                            uri = terminal_uri,
-                            preferred_view = 'float',
-                        },
-                    },
-                },
-            },
-        })
-
-        local report = plugin.api.execute_restore(saved.id, {
-            use_mksession = false,
-        })
-
-        arboretum.api.switch = original_switch
-        laboratory.api.set_current = original_set_current
-        laboratory.api.open_terminal = original_open_terminal
-        terminalia.api.open_uri = original_open_uri
-
-        assert.are.same({
-            'session:cwd',
-            'arboretum:1',
-            'laboratory:1',
-            'laboratory:2',
-            'terminalia:1',
-        }, report.executed_steps)
-        assert.are.same({
-            { kind = 'arboretum.switch', value = '/repo/feature' },
-            { kind = 'laboratory.select', value = 'devcontainer:workspace' },
-            { kind = 'laboratory.reopen_terminals', value = 'devcontainerterminal:1', view = 'float' },
-            {
-                kind = 'terminalia.reopen_terminals',
-                value = terminal_uri,
-                view = 'float',
-            },
-        }, calls)
+        assert.are.same({ 'session:cwd', 'terminal_manager:1', 'workspace:1' }, report.executed_steps)
+        assert.are.same({ 'terminalia.reopen_terminals', 'workspace.select' }, calls)
     end)
 
     it('integrates real dogfood providers including Tabulature hierarchy replay when available', function()
@@ -1022,7 +728,7 @@ describe('continuity restore execution', function()
         })
 
         local report = plugin.api.execute_restore(saved.id, {
-            use_mksession = false,
+            force_current = true,
         })
         local tab_tree = require('tabulature.state').to_tree()
 
@@ -1061,59 +767,5 @@ describe('continuity restore execution', function()
         assert.are.equal('Workspace', tab_tree.children[1].label)
         assert.are.equal('Editor', tab_tree.children[1].children[1].label)
         assert.is_true(tab_tree.children[1].children[1].active)
-    end)
-
-    it('normalizes pre/post mksession dependency edges to avoid cross-phase ordering failures', function()
-        local plugin = require('continuity')
-        local root = vim.fn.tempname()
-        local calls = {}
-
-        vim.fn.mkdir(root, 'p')
-
-        plugin.api.register_contributor('terminal_manager', {
-            restore_phase = 'after_mksession',
-            plan_restore = function()
-                return {
-                    {
-                        kind = 'terminalia.reopen_terminals',
-                        title = 'Reopen terminals',
-                    },
-                }
-            end,
-            restore = function(step)
-                table.insert(calls, step.kind)
-            end,
-        })
-        plugin.api.register_contributor('workspace', {
-            restore_after = { 'terminal_manager' },
-            plan_restore = function()
-                return {
-                    {
-                        kind = 'workspace.select',
-                        title = 'Select workspace',
-                    },
-                }
-            end,
-            restore = function(step)
-                table.insert(calls, step.kind)
-            end,
-        })
-
-        local saved = plugin.api.save({
-            name = 'ordered-normalized-cross-phase',
-            cwd = root,
-            contributors = {
-                terminal_manager = {},
-                workspace = {},
-            },
-        })
-
-        local report = plugin.api.execute_restore(saved.id, {
-            use_mksession = false,
-        })
-
-        assert.are.same({ 'session:cwd', 'terminal_manager:1', 'workspace:1' }, report.executed_steps)
-        assert.are.same({ 'terminalia.reopen_terminals', 'workspace.select' }, calls)
-        assert.is_false(report.mksession_loaded)
     end)
 end)

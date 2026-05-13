@@ -1,5 +1,6 @@
 local contributors = require('continuity.contributors.registry')
-local mksession = require('continuity.persistence.mksession')
+local config = require('continuity.core.config')
+local layout = require('continuity.restore.layout')
 local restore_plan = require('continuity.restore.plan')
 
 local M = {}
@@ -20,7 +21,7 @@ end
 ---@field session_name string
 ---@field executed_steps string[]
 ---@field manual_steps continuity.RestorePlanStep[]
----@field mksession_loaded boolean
+---@field layout_restored boolean
 
 ---@param report continuity.RestoreExecutionReport
 ---@param step continuity.RestorePlanStep
@@ -75,23 +76,23 @@ local function run_step(step, record, opts)
 end
 
 ---@param step continuity.RestorePlanStep
----@return '"before_mksession"'|'"after_mksession"'
+---@return '"before_layout"'|'"after_layout"'
 local function restore_phase(step)
     if step.contributor == 'session' then
-        return 'before_mksession'
+        return 'before_layout'
     end
 
-    if step.restore_phase == 'after_mksession' then
-        return 'after_mksession'
+    if step.restore_phase == 'after_layout' then
+        return 'after_layout'
     end
 
     local contributor = contributors.get(step.contributor)
 
-    if contributor ~= nil and contributor.restore_phase == 'after_mksession' then
-        return 'after_mksession'
+    if contributor ~= nil and contributor.restore_phase == 'after_layout' then
+        return 'after_layout'
     end
 
-    return 'before_mksession'
+    return 'before_layout'
 end
 
 ---@param steps continuity.RestorePlanStep[]
@@ -101,7 +102,7 @@ local function partition_steps(steps)
     local after = {}
 
     for _, step in ipairs(steps) do
-        if restore_phase(step) == 'after_mksession' then
+        if restore_phase(step) == 'after_layout' then
             table.insert(after, step)
         else
             table.insert(before, step)
@@ -131,8 +132,28 @@ local function run_steps(report, steps, record, executed, opts)
 end
 
 ---@param record continuity.Record
+local function validate_external_shada(record)
+    local policy = config.get().shada.external_policy
+
+    if vim.o.shada == '' or policy == 'ignore' then
+        return
+    end
+
+    local message = string.format(
+        'Continuity is restoring session %s with external shada configured; synthetic ShaDa fidelity may be affected',
+        record.id
+    )
+
+    if policy == 'error' then
+        error(message)
+    end
+
+    vim.notify(message, vim.log.levels.WARN)
+end
+
+---@param record continuity.Record
 ---@param plan? continuity.RestorePlan
----@param opts? { use_mksession?: boolean }
+---@param opts? { force_current?: boolean, restore_layout?: boolean }
 ---@return continuity.RestoreExecutionReport
 function M.execute(record, plan, opts)
     local resolved_plan = plan or restore_plan.build(record)
@@ -141,19 +162,19 @@ function M.execute(record, plan, opts)
         session_name = record.name,
         executed_steps = {},
         manual_steps = {},
-        mksession_loaded = false,
+        layout_restored = false,
     }
     local executed = {}
-    local pre_mksession_steps, post_mksession_steps = partition_steps(resolved_plan.steps)
-    local use_mksession = opts == nil or opts.use_mksession ~= false
+    local pre_layout_steps, post_layout_steps = partition_steps(resolved_plan.steps)
 
-    run_steps(report, pre_mksession_steps, record, executed, opts)
+    run_steps(report, pre_layout_steps, record, executed, opts)
 
-    if use_mksession and mksession.load(record.id) then
-        report.mksession_loaded = true
+    if opts == nil or opts.restore_layout ~= false then
+        validate_external_shada(record)
+        report.layout_restored = layout.restore(record).restored
     end
 
-    run_steps(report, post_mksession_steps, record, executed, opts)
+    run_steps(report, post_layout_steps, record, executed, opts)
 
     return report
 end

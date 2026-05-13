@@ -31,7 +31,6 @@ describe('session', function()
         package.loaded['continuity.core.model'] = nil
         package.loaded['continuity.core.session_key'] = nil
         package.loaded['continuity.live.state'] = nil
-        package.loaded['continuity.persistence.mksession'] = nil
         package.loaded['continuity.persistence.storage'] = nil
         package.loaded['continuity.restore.execute'] = nil
         package.loaded['continuity.restore.plan'] = nil
@@ -147,6 +146,36 @@ describe('session', function()
         assert.are.equal(saved.id, restored[1].id)
         assert.are.equal('/tmp/workspace', restored[1].state.cwd)
         assert.are.same(restored[1], plugin.api.load(saved.id))
+    end)
+
+    it('refuses to execute restore for the currently active live session by default', function()
+        local plugin = require('continuity')
+        local original_cwd = vim.fn.getcwd()
+        local target = vim.fn.tempname()
+
+        vim.fn.mkdir(target, 'p')
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                session_id = 'session:active-api',
+            },
+        })
+
+        plugin.api.save({
+            id = 'session:active-api',
+            name = 'active',
+            cwd = target,
+        })
+
+        local ok, err = pcall(function()
+            plugin.api.execute_restore('session:active-api')
+        end)
+
+        assert.is_false(ok)
+        assert.is_true(tostring(err):find('Refusing to restore currently active Continuity session', 1, true) ~= nil)
+        assert.are.equal(original_cwd, vim.fn.getcwd())
     end)
 
     it('deletes persisted session metadata records', function()

@@ -1,9 +1,9 @@
 ---@class continuity.Config
 ---@field state_file string
 ---@field continuous continuity.ContinuousConfig
----@field mksession continuity.MksessionConfig
 ---@field session_key continuity.SessionKeyConfig
 ---@field autoload continuity.AutoloadConfig
+---@field shada continuity.ShadaConfig
 
 ---@alias continuity.AutoloadPolicy '"disabled"'|'"cwd"'|'"cwd_branch"'|'"last"'
 
@@ -12,17 +12,16 @@
 ---@field session_id string Use "auto" to derive from the current session key.
 ---@field write_debounce_ms integer
 
----@class continuity.MksessionConfig
----@field enabled boolean
----@field capture_live boolean
----@field dir string
----@field sessionoptions? string|string[]
-
 ---@class continuity.SessionKeyConfig
 ---@field use_git_branch boolean
 
 ---@class continuity.AutoloadConfig
 ---@field policy continuity.AutoloadPolicy
+
+---@alias continuity.ExternalShadaPolicy '"ignore"'|'"warn"'|'"error"'
+
+---@class continuity.ShadaConfig
+---@field external_policy continuity.ExternalShadaPolicy
 
 local M = {}
 
@@ -33,17 +32,14 @@ local defaults = {
         session_id = 'session:live',
         write_debounce_ms = 250,
     },
-    mksession = {
-        enabled = false,
-        capture_live = false,
-        dir = vim.fs.joinpath(vim.fn.stdpath('state'), 'continuity.nvim', 'mksession'),
-        sessionoptions = nil,
-    },
     session_key = {
         use_git_branch = false,
     },
     autoload = {
         policy = 'disabled',
+    },
+    shada = {
+        external_policy = 'warn',
     },
 }
 
@@ -52,6 +48,12 @@ local valid_autoload_policies = {
     cwd_branch = true,
     disabled = true,
     last = true,
+}
+
+local valid_external_shada_policies = {
+    error = true,
+    ignore = true,
+    warn = true,
 }
 
 ---@type continuity.Config
@@ -64,6 +66,10 @@ function M.set(opts)
 
     if valid_autoload_policies[current.autoload.policy] ~= true then
         current.autoload.policy = 'disabled'
+    end
+
+    if valid_external_shada_policies[current.shada.external_policy] ~= true then
+        current.shada.external_policy = 'warn'
     end
 
     return vim.deepcopy(current)

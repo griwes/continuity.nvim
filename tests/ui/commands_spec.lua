@@ -14,7 +14,6 @@ describe('continuity commands', function()
         package.loaded['continuity.core.session_items'] = nil
         package.loaded['continuity.core.session_key'] = nil
         package.loaded['continuity.live.state'] = nil
-        package.loaded['continuity.persistence.mksession'] = nil
         package.loaded['continuity.persistence.storage'] = nil
         package.loaded['continuity.restore.autoload'] = nil
         package.loaded['continuity.restore.execute'] = nil
@@ -124,6 +123,29 @@ describe('continuity commands', function()
 
         assert.are.equal(target, vim.fn.getcwd())
         assert.is_true(notifications[#notifications]:find(saved.id, 1, true) ~= nil)
+    end)
+
+    it('does not reload the currently active live session through ContinuityLoad', function()
+        local target = mkdir(vim.fn.tempname())
+        local plugin = setup({
+            continuous = {
+                enabled = true,
+                session_id = 'session:active-command',
+            },
+        }, {
+            clear = false,
+        })
+
+        plugin.api.save({
+            id = 'session:active-command',
+            name = 'active',
+            cwd = target,
+        })
+
+        vim.cmd('ContinuityLoad session:active-command')
+
+        assert.are.equal(original_cwd, vim.fn.getcwd())
+        assert.are.equal('Continuity session session:active-command is already active', notifications[#notifications])
     end)
 
     it('loads a picked session when ContinuityLoad receives no id', function()

@@ -11,7 +11,6 @@ describe('continuity autoload', function()
         package.loaded['continuity.core.model'] = nil
         package.loaded['continuity.core.session_key'] = nil
         package.loaded['continuity.live.state'] = nil
-        package.loaded['continuity.persistence.mksession'] = nil
         package.loaded['continuity.persistence.storage'] = nil
         package.loaded['continuity.restore.autoload'] = nil
         package.loaded['continuity.restore.execute'] = nil
@@ -44,6 +43,9 @@ describe('continuity autoload', function()
 
         plugin.setup(vim.tbl_deep_extend('force', {
             state_file = state_file,
+            shada = {
+                external_policy = 'ignore',
+            },
         }, opts or {}))
 
         return plugin
@@ -238,6 +240,101 @@ describe('continuity autoload', function()
         assert.is_true(plugin.last_autoload.loaded)
         assert.are.equal('session:new', plugin.last_autoload.session_id)
         assert.are.equal(new_cwd, vim.fn.getcwd())
+    end)
+
+    it('restores an autoloaded contributor that registers after startup', function()
+        local cwd = mkdir(vim.fn.tempname())
+        local captured = {
+            version = 1,
+            active_path = { 2, 1 },
+            children = {
+                {
+                    label = 'One',
+                    selected_child_index = 1,
+                    children = {
+                        {
+                            label = 'Two',
+                            selected_child_index = 1,
+                            children = {
+                                { label = 'Three', children = {} },
+                            },
+                        },
+                    },
+                },
+                {
+                    label = 'Four',
+                    selected_child_index = 1,
+                    children = {
+                        { label = 'Five', children = {} },
+                    },
+                },
+            },
+        }
+
+        write_state({
+            {
+                id = 'session:tabs',
+                name = 'tabs',
+                cwd = cwd,
+                state = {},
+                contributors = {
+                    tabulature = captured,
+                },
+                created_at = 1,
+                updated_at = 1,
+            },
+        })
+
+        vim.api.nvim_set_current_dir(cwd)
+
+        local plugin = setup({
+            autoload = {
+                policy = 'cwd',
+            },
+        })
+
+        assert.is_true(plugin.last_autoload.loaded)
+        assert.are.equal('session:tabs', plugin.last_autoload.session_id)
+        assert.are.equal(1, #plugin.last_autoload.execution.manual_steps)
+        assert.are.equal('continuity.unknown_contributor', plugin.last_autoload.execution.manual_steps[1].kind)
+        assert.are.equal('tabulature', plugin.last_autoload.execution.manual_steps[1].contributor)
+
+        local restored
+
+        plugin.api.register_contributor('tabulature', {
+            plan_restore = function(payload, record)
+                return {
+                    {
+                        id = 'tabulature:restore',
+                        kind = 'tabulature.restore_tabs',
+                        payload = payload,
+                        detail = record.id,
+                    },
+                }
+            end,
+            restore = function(step, record, opts)
+                restored = {
+                    step = step,
+                    record = record,
+                    opts = opts,
+                }
+            end,
+        })
+
+        if restored == nil then
+            vim.api.nvim_exec_autocmds('VimEnter', {})
+            vim.wait(1000, function()
+                return restored ~= nil
+            end)
+        end
+
+        assert.is_not_nil(restored)
+        assert.are.same(captured, restored.step.payload)
+        assert.are.equal('session:tabs', restored.record.id)
+        assert.are.same({
+            late_registration = true,
+            restore_layout = false,
+        }, restored.opts)
     end)
 
     it('reports a safe miss instead of failing startup', function()

@@ -10,7 +10,6 @@ describe('continuity live state', function()
         package.loaded['continuity.core.model'] = nil
         package.loaded['continuity.core.session_key'] = nil
         package.loaded['continuity.live.state'] = nil
-        package.loaded['continuity.persistence.mksession'] = nil
         package.loaded['continuity.restore.plan'] = nil
         package.loaded['continuity.restore.execute'] = nil
         package.loaded['continuity.persistence.storage'] = nil
@@ -41,6 +40,8 @@ describe('continuity live state', function()
         assert.are.equal(vim.fn.getcwd(), live.cwd)
         assert.are.equal(vim.api.nvim_get_current_buf(), live.state.nvim.current.buffer)
         assert.are.equal(vim.api.nvim_get_current_tabpage(), live.state.nvim.current.tab)
+        assert.are.equal(vim.api.nvim_win_get_width(0), live.state.nvim.tabs[1].windows[1].width)
+        assert.are.equal(vim.api.nvim_win_get_height(0), live.state.nvim.tabs[1].windows[1].height)
     end)
 
     it('recaptures contributor-owned live state when notified and persists it on the configured cadence', function()
@@ -76,6 +77,62 @@ describe('continuity live state', function()
         end, 10)
 
         assert.is_true(persisted)
+    end)
+
+    it('recaptures contributor-owned live state on layout events', function()
+        local plugin = require('continuity')
+        local value = 'alpha'
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 1000,
+            },
+        })
+
+        plugin.api.register_contributor('workspace', {
+            capture = function()
+                return {
+                    value = value,
+                }
+            end,
+        })
+
+        value = 'beta'
+        vim.cmd('split')
+        vim.cmd('close')
+
+        assert.are.equal('beta', plugin.api.live_state().contributors.workspace.value)
+        assert.is_nil(plugin.api.load('session:live'))
+    end)
+
+    it('flushes contributor-owned live state synchronously before exit', function()
+        local plugin = require('continuity')
+        local value = 'alpha'
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 1000,
+            },
+        })
+
+        plugin.api.register_contributor('workspace', {
+            capture = function()
+                return {
+                    value = value,
+                }
+            end,
+        })
+
+        value = 'final'
+        vim.api.nvim_exec_autocmds('VimLeavePre', {
+            modeline = false,
+        })
+
+        assert.are.equal('final', plugin.api.load('session:live').contributors.workspace.value)
     end)
 
     it('ignores contributor notifications when continuous state is disabled', function()
@@ -115,6 +172,35 @@ describe('continuity live state', function()
         assert.is_nil(persisted)
     end)
 
+    it('captures resized window dimensions on explicit save', function()
+        local plugin = require('continuity')
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 1000,
+            },
+        })
+
+        vim.cmd('split')
+        vim.cmd('resize 5')
+
+        local saved = plugin.api.capture()
+        local heights = {}
+
+        for _, tab in ipairs(saved.state.nvim.tabs or {}) do
+            for _, win in ipairs(tab.windows or {}) do
+                table.insert(heights, tonumber(win.height) or 0)
+            end
+        end
+
+        table.sort(heights)
+
+        assert.is_true(#heights >= 2)
+        assert.is_true(heights[1] <= 7)
+    end)
+
     it('refreshes buffer modified state from edit and write events', function()
         local plugin = require('continuity')
         local path = vim.fn.tempname()
@@ -144,9 +230,11 @@ describe('continuity live state', function()
         assert.is_nil(plugin.api.load('session:live'))
     end)
 
-    it('does not capture mksession for the live session by default', function()
+    it('captures the structured window layout in the live session', function()
         local plugin = require('continuity')
-        local session_dir = vim.fs.joinpath(vim.fn.tempname(), 'views')
+
+        vim.cmd('silent! tabonly!')
+        vim.cmd('silent! only!')
 
         plugin.setup({
             state_file = state_file,
@@ -154,41 +242,15 @@ describe('continuity live state', function()
                 enabled = true,
                 write_debounce_ms = 0,
             },
-            mksession = {
-                enabled = true,
-                dir = session_dir,
-            },
         })
 
+        vim.cmd('belowright split')
         plugin.api.sync_live_state()
 
-        local mksession = require('continuity.persistence.mksession')
+        local live = assert(plugin.api.live_state())
 
-        assert.are.equal(0, vim.fn.filereadable(mksession.path('session:live')))
-    end)
-
-    it('can opt into capturing mksession for the live session', function()
-        local plugin = require('continuity')
-        local session_dir = vim.fs.joinpath(vim.fn.tempname(), 'views')
-
-        plugin.setup({
-            state_file = state_file,
-            continuous = {
-                enabled = true,
-                write_debounce_ms = 0,
-            },
-            mksession = {
-                enabled = true,
-                capture_live = true,
-                dir = session_dir,
-            },
-        })
-
-        plugin.api.sync_live_state()
-
-        local mksession = require('continuity.persistence.mksession')
-
-        assert.are.equal(1, vim.fn.filereadable(mksession.path('session:live')))
+        assert.are.equal('col', live.state.nvim.tabs[1].layout[1])
+        assert.are.equal(2, #live.state.nvim.tabs[1].windows)
     end)
 
     it('can derive the live session id from cwd and Git branch', function()
@@ -224,11 +286,10 @@ describe('continuity live state', function()
         assert.are.equal('feature/live', plugin.api.load(feature.id).state.continuity.session_key.branch)
     end)
 
-    it('does not capture mksession for auto live sessions by default', function()
+    it('does not write Vim session files for auto live sessions', function()
         local plugin = require('continuity')
         local original_cwd = vim.fn.getcwd()
         local repo = test_git.repo('continuity-live-git')
-        local session_dir = vim.fs.joinpath(vim.fn.tempname(), 'views')
 
         vim.api.nvim_set_current_dir(repo)
         plugin.setup({
@@ -238,10 +299,6 @@ describe('continuity live state', function()
                 session_id = 'auto',
                 write_debounce_ms = 0,
             },
-            mksession = {
-                enabled = true,
-                dir = session_dir,
-            },
             session_key = {
                 use_git_branch = true,
             },
@@ -250,10 +307,9 @@ describe('continuity live state', function()
         plugin.api.sync_live_state()
 
         local live = assert(plugin.api.live_state())
-        local mksession = require('continuity.persistence.mksession')
 
         vim.api.nvim_set_current_dir(original_cwd)
 
-        assert.are.equal(0, vim.fn.filereadable(mksession.path(live.id)))
+        assert.is_not_nil(plugin.api.load(live.id))
     end)
 end)

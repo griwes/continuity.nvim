@@ -4,6 +4,9 @@ local session_key = require('continuity.core.session_key')
 local storage = require('continuity.persistence.storage')
 
 local M = {}
+local state = {
+    last_report = nil,
+}
 
 ---@class continuity.AutoloadReport
 ---@field policy continuity.AutoloadPolicy
@@ -107,34 +110,43 @@ function M.run()
     local policy = config.get().autoload.policy
 
     if policy == 'disabled' then
-        return report(policy, {
+        state.last_report = report(policy, {
             reason = 'disabled',
         })
+        return state.last_report
     end
 
     local record = M.select(policy)
 
     if record == nil then
-        return report(policy, {
+        state.last_report = report(policy, {
             reason = 'not_found',
         })
+        return state.last_report
     end
 
     local ok, execution = pcall(restore_execute.execute, vim.deepcopy(record))
 
     if not ok then
-        return report(policy, {
+        state.last_report = report(policy, {
             reason = 'restore_failed',
             error = tostring(execution),
             session_id = record.id,
         })
+        return state.last_report
     end
 
-    return report(policy, {
+    state.last_report = report(policy, {
         loaded = true,
         session_id = record.id,
         execution = execution,
     })
+    return state.last_report
+end
+
+---@return continuity.AutoloadReport?
+function M.last_report()
+    return state.last_report ~= nil and vim.deepcopy(state.last_report) or nil
 end
 
 return M

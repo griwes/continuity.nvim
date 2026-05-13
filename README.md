@@ -4,7 +4,7 @@ Continuous logical session state for the Neovim plugin orchestration workspace.
 
 ## Status
 
-Early development. The current slice provides a standalone repo, typed setup/config, a local session registry with save/load/list/delete behavior, opt-in cwd/Git-branch session keys, explicit startup autoload policies, contributor-owned capture hooks, a restore-plan surface, an opt-in continuous live-session tracker with debounced persistence, and a first narrow restore executor with an optional `mksession` substrate for builtin view/layout state. Post-`mksession` replay is contributor-driven through `restore_phase` rather than hardcoded by provider name. Broader replay remains future work.
+Early development. The current slice provides a standalone repo, typed setup/config, a local session registry with save/load/list/delete behavior, opt-in cwd/Git-branch session keys, explicit startup autoload policies, contributor-owned capture hooks, a restore-plan surface, an opt-in continuous live-session tracker with debounced persistence, and a structured JSON restore executor for builtin editor layout. Contributor replay is ordered around the structured layout boundary through `restore_phase`, and jump/change contents are restored through Continuity-owned synthetic ShaDa fragments where Neovim lacks public setters.
 
 ## Installation
 
@@ -26,21 +26,10 @@ Example local `lazy.nvim` spec:
         autoload = {
             policy = 'cwd_branch',
         },
-        mksession = {
-            enabled = true,
-            capture_live = false,
-            sessionoptions = {
-                'blank',
-                'buffers',
-                'curdir',
-                'folds',
-                'help',
-                'tabpages',
-                'winsize',
-                'winpos',
-                'terminal',
-                'globals',
-            },
+        shada = {
+            -- "warn" warns if external ShaDa is configured during restore.
+            -- Use "error" for strict Continuity-owned sessions.
+            external_policy = 'warn',
         },
     },
 }
@@ -49,15 +38,16 @@ Example local `lazy.nvim` spec:
 For a direct replacement of the current persisted.nvim-style setup, see
 [`docs/persisted-migration.md`](docs/persisted-migration.md).
 
-By default, `mksession` capture is used for named saved sessions only. The continuous live session keeps its logical state coherent in memory and on disk without writing a Vim session file unless `mksession.capture_live = true` is set explicitly.
+Continuity does not use `:mksession` for normal save or restore. Builtin editor
+state is captured into the JSON record as buffers, tabs, windows, layout trees,
+views, jumplists, and changelists. Restore recreates that structure directly
+through Neovim APIs. Jump/change contents are restored by generating minimal
+temporary ShaDa fragments that contain only Continuity-owned entries.
 
-Set `mksession.sessionoptions` to a comma-separated string or a list of option
-names when Continuity should capture Vim session files with a known option set.
-When unset, Continuity preserves Neovim's ambient `sessionoptions` behavior. A
-configured value is applied only for the `:mksession` capture call and the
-previous editor option is restored afterward. An explicitly empty string or
-empty list captures with empty `sessionoptions`; use `nil`/omit the key for
-ambient behavior.
+Set `shada.external_policy = 'error'` for strict sessions that must not run
+while external user ShaDa is configured. The default `warn` mode allows restore
+but reports that user ShaDa may affect fidelity; `ignore` is useful in tests or
+when another part of the config already controls ShaDa isolation.
 
 Set `session_key.use_git_branch = true` to derive new implicit session IDs
 from the current cwd and Git branch instead of allocating sequential

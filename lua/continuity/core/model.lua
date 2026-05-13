@@ -11,7 +11,7 @@
 ---@field capture? fun(): any
 ---@field plan_restore? fun(captured: any, record: continuity.Record): continuity.RestorePlanStep[]|{ steps: continuity.RestorePlanStep[] }|nil
 ---@field restore? fun(step: continuity.RestorePlanStep, record: continuity.Record, opts?: table)
----@field restore_phase? '"before_mksession"'|'"after_mksession"'
+---@field restore_phase? '"before_layout"'|'"after_layout"'
 ---@field restore_after? string[]
 
 local M = {}

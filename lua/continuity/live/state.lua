@@ -1,4 +1,5 @@
 local config = require('continuity.core.config')
+local builtin_state = require('continuity.core.builtin_state')
 local contributors = require('continuity.contributors.registry')
 local model = require('continuity.core.model')
 local session_key = require('continuity.core.session_key')
@@ -11,6 +12,9 @@ local state = {
     record = nil,
     timer = nil,
 }
+
+local refresh_builtin_state
+local refresh_contributor
 
 ---@return continuity.ContinuousConfig
 local function live_config()
@@ -58,60 +62,6 @@ local function stop_timer()
     end
 end
 
----@return table
-local function builtin_state()
-    local buffers = {}
-    local current_buffer = vim.api.nvim_get_current_buf()
-    local current_window = vim.api.nvim_get_current_win()
-    local current_tab = vim.api.nvim_get_current_tabpage()
-
-    for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
-        table.insert(buffers, {
-            id = buffer,
-            name = vim.api.nvim_buf_get_name(buffer),
-            listed = vim.fn.buflisted(buffer) == 1,
-            loaded = vim.api.nvim_buf_is_loaded(buffer),
-            modified = vim.bo[buffer].modified,
-            buftype = vim.bo[buffer].buftype,
-        })
-    end
-
-    table.sort(buffers, function(left, right)
-        return left.id < right.id
-    end)
-
-    local tabs = {}
-
-    for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
-        local windows = {}
-
-        for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-            table.insert(windows, {
-                id = window,
-                buffer = vim.api.nvim_win_get_buf(window),
-                current = window == current_window,
-            })
-        end
-
-        table.insert(tabs, {
-            id = tab,
-            current = tab == current_tab,
-            windows = windows,
-        })
-    end
-
-    return {
-        cwd = vim.fn.getcwd(),
-        current = {
-            buffer = current_buffer,
-            window = current_window,
-            tab = current_tab,
-        },
-        buffers = buffers,
-        tabs = tabs,
-    }
-end
-
 ---@return continuity.Record
 local function ensure_record()
     local session_id = live_session_id()
@@ -144,6 +94,31 @@ local function persist_now()
     end
 
     storage.save(state.record)
+end
+
+local function refresh_contributors()
+    for _, name in ipairs(contributors.names()) do
+        local contributor = contributors.get(name)
+
+        if contributor ~= nil and type(contributor.capture) == 'function' then
+            refresh_contributor(name)
+        end
+    end
+end
+
+local function refresh_all_state()
+    refresh_builtin_state()
+    refresh_contributors()
+end
+
+local function flush_now()
+    if not enabled() then
+        return
+    end
+
+    refresh_all_state()
+    stop_timer()
+    persist_now()
 end
 
 local function schedule_persist()
@@ -185,15 +160,15 @@ local function update_record(mutator)
     })
 end
 
-local function refresh_builtin_state()
+refresh_builtin_state = function()
     update_record(function(record)
-        record.cwd = vim.fn.getcwd()
+        record.cwd = vim.uv.cwd() or vim.fn.getcwd()
         apply_auto_session_key_state(record)
-        record.state.nvim = builtin_state()
+        record.state.nvim = builtin_state.capture()
     end)
 end
 
-local function refresh_contributor(name)
+refresh_contributor = function(name)
     local contributor = contributors.get(name)
 
     assert(contributor ~= nil, string.format('Unknown session contributor: %s', name))
@@ -227,16 +202,7 @@ function M.refresh_all()
         return
     end
 
-    refresh_builtin_state()
-
-    for _, name in ipairs(contributors.names()) do
-        local contributor = contributors.get(name)
-
-        if contributor ~= nil and type(contributor.capture) == 'function' then
-            refresh_contributor(name)
-        end
-    end
-
+    refresh_all_state()
     schedule_persist()
 end
 
@@ -269,18 +235,32 @@ local function register_autocmds()
         'TabClosed',
         'TabEnter',
         'TabNewEntered',
+        'WinClosed',
+        'WinEnter',
+        'WinResized',
+    }, {
+        group = state.group_id,
+        callback = function()
+            refresh_all_state()
+            schedule_persist()
+        end,
+    })
+
+    vim.api.nvim_create_autocmd({
         'TextChanged',
         'TextChangedI',
         'TextChangedP',
-        'VimLeavePre',
-        'WinClosed',
-        'WinEnter',
     }, {
         group = state.group_id,
         callback = function()
             refresh_builtin_state()
             schedule_persist()
         end,
+    })
+
+    vim.api.nvim_create_autocmd('VimLeavePre', {
+        group = state.group_id,
+        callback = flush_now,
     })
 
     vim.api.nvim_create_autocmd('OptionSet', {
@@ -302,13 +282,7 @@ function M.start()
     refresh_builtin_state()
     register_autocmds()
 
-    for _, name in ipairs(contributors.names()) do
-        local contributor = contributors.get(name)
-
-        if contributor ~= nil and type(contributor.capture) == 'function' then
-            refresh_contributor(name)
-        end
-    end
+    refresh_contributors()
 
     schedule_persist()
 end

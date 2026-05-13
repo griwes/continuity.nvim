@@ -1,15 +1,15 @@
 # Migrating from persisted.nvim
 
 Continuity can replace the common `persisted.nvim` setup where sessions are
-autoloaded by cwd plus Git branch and `sessionoptions` is configured globally.
+autoloaded by cwd plus Git branch. Unlike persisted.nvim, Continuity does not
+use `:mksession` as its normal substrate; it stores an opinionated structured
+JSON model and restores that model directly.
 
 ## Persisted Configuration
 
 The current live-config shape is:
 
 ```lua
-vim.o.sessionoptions = 'blank,buffers,curdir,folds,help,tabpages,winsize,winpos,terminal,globals'
-
 return {
     {
         'olimorris/persisted.nvim',
@@ -47,30 +47,17 @@ return {
             autoload = {
                 policy = 'cwd_branch',
             },
-            mksession = {
-                enabled = true,
-                capture_live = false,
-                sessionoptions = {
-                    'blank',
-                    'buffers',
-                    'curdir',
-                    'folds',
-                    'help',
-                    'tabpages',
-                    'winsize',
-                    'winpos',
-                    'terminal',
-                    'globals',
-                },
+            shada = {
+                external_policy = 'warn',
             },
         },
     },
 }
 ```
 
-This moves `sessionoptions` from a global editor mutation into Continuity's
-`mksession.sessionoptions`. Continuity applies that value only while capturing a
-Vim session file and restores the ambient option afterward.
+There is no `sessionoptions` migration step. Continuity captures buffers, tabs,
+windows, layout, views, and selected editor history directly into its session
+record.
 
 ## Behavior Mapping
 
@@ -78,7 +65,7 @@ Vim session file and restores the ambient option afterward.
 | --- | --- |
 | `use_git_branch = true` | `session_key.use_git_branch = true` |
 | `autoload = true` | `autoload.policy = 'cwd_branch'` |
-| global `vim.o.sessionoptions = ...` | `mksession.sessionoptions = { ... }` |
+| global `vim.o.sessionoptions = ...` | not needed; Continuity does not use `:mksession` |
 | manual save/load commands | `:ContinuitySave`, `:ContinuityLoad`, `:ContinuityList`, `:ContinuityDelete`, `:ContinuityCurrent` |
 | one session per cwd/branch | derived `session:<cwd-name>:<branch>:<digest>` keys |
 
@@ -96,12 +83,6 @@ Continuity stores session metadata at:
 stdpath('state')/continuity.nvim/sessions.json
 ```
 
-Optional Vim `:mksession` files are stored at:
-
-```text
-stdpath('state')/continuity.nvim/mksession/<sanitized-session-id>.vim
-```
-
 The metadata file stores Continuity records, contributor payloads, the last
 session id, and the next sequential id. It does not reuse or import
 persisted.nvim's storage format, so old persisted.nvim session files can be
@@ -114,15 +95,12 @@ editor autocmds and plugin contributor notifications. With
 `continuous.session_id = 'auto'`, the live session key is derived from the
 current cwd and Git branch.
 
-By default, live sessions do not write `:mksession` files. This avoids rewriting
-large Vim session files on every debounced update. Named sessions saved through
-`:ContinuitySave` still capture `mksession` when `mksession.enabled = true`.
-Set `mksession.capture_live = true` only if the live session itself should also
-write Vim session files.
+Live and named sessions use the same JSON substrate. No Vim session files are
+written.
 
 ## Plugin-Owned State
 
-Continuity is not just a `:mksession` wrapper. Plugins can register contributors
+Continuity is not a `:mksession` wrapper. Plugins can register contributors
 that capture and replay logical state:
 
 - `terminalia.nvim` reopens canonical terminal URIs after workspace context is

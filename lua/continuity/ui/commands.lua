@@ -75,6 +75,11 @@ end
 
 ---@param id string
 local function load_session(id)
+    if api.is_current_session(id) then
+        present(string.format('Continuity session %s is already active', id))
+        return
+    end
+
     local report = api.execute_restore(id)
     present(string.format('Loaded Continuity session %s', report.session_id))
 end

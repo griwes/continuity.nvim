@@ -18,7 +18,7 @@ end
 ---@field kind string
 ---@field title string
 ---@field detail? string
----@field restore_phase? '"before_mksession"'|'"after_mksession"'
+---@field restore_phase? '"before_layout"'|'"after_layout"'
 ---@field depends_on string[]
 ---@field payload any
 ---@field manual boolean
@@ -118,8 +118,8 @@ local function ordered_contributors(names)
 
     for _, name in ipairs(names) do
         local contributor = contributors.get(name)
-        local phase = contributor ~= nil and contributor.restore_phase == 'after_mksession' and 'after_mksession'
-            or 'before_mksession'
+        local phase = contributor ~= nil and contributor.restore_phase == 'after_layout' and 'after_layout'
+            or 'before_layout'
 
         contributor_phase[name] = phase
         restore_after[name] = {}
@@ -147,10 +147,10 @@ local function ordered_contributors(names)
         changed = false
 
         for _, name in ipairs(names) do
-            if contributor_phase[name] == 'before_mksession' then
+            if contributor_phase[name] == 'before_layout' then
                 for _, dependency in ipairs(restore_after[name]) do
-                    if contributor_phase[dependency] == 'after_mksession' then
-                        contributor_phase[name] = 'after_mksession'
+                    if contributor_phase[dependency] == 'after_layout' then
+                        contributor_phase[name] = 'after_layout'
                         changed = true
                         break
                     end
@@ -229,7 +229,7 @@ function M.build(record)
 
         for index, step in ipairs(contributor_steps_list) do
             if contributor ~= nil then
-                step.restore_phase = contributor_phase[name] or 'before_mksession'
+                step.restore_phase = contributor_phase[name] or 'before_layout'
             end
 
             if index == 1 then
