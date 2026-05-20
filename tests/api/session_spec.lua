@@ -231,6 +231,24 @@ describe('session', function()
         assert.are.same({}, plugin.api.list())
     end)
 
+    it('deletes a session clean snapshot with its base session', function()
+        local plugin = require('continuity')
+        local storage = require('continuity.persistence.storage')
+
+        local saved = plugin.api.save({
+            name = 'alpha',
+        })
+        local clean = storage.save_clean_snapshot(saved)
+
+        assert.is_not_nil(plugin.api.load(clean.id))
+
+        plugin.api.delete(saved.id)
+
+        assert.is_nil(plugin.api.load(saved.id))
+        assert.is_nil(plugin.api.load(clean.id))
+        assert.are.same({}, plugin.api.list())
+    end)
+
     it('registers contributors and captures their state into saved session records', function()
         local plugin = require('continuity')
 

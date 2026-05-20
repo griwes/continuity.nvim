@@ -234,6 +234,39 @@ describe('continuity autoload', function()
         assert.are.equal(repo, vim.fn.getcwd())
     end)
 
+    it('prefers the branch-specific clean snapshot when one exists', function()
+        local repo = test_git.repo('continuity-autoload-clean-branch')
+        vim.api.nvim_set_current_dir(repo)
+
+        local plugin = setup({
+            session_key = {
+                use_git_branch = true,
+            },
+        })
+        local saved = plugin.api.save({
+            cwd = repo,
+            state = {
+                marker = 'live',
+            },
+        })
+        local clean =
+            require('continuity.persistence.storage').save_clean_snapshot(vim.tbl_deep_extend('force', saved, {
+                state = {
+                    marker = 'clean',
+                    continuity = saved.state.continuity,
+                },
+            }))
+
+        plugin = setup({
+            autoload = {
+                policy = 'cwd_branch',
+            },
+        })
+
+        assert.is_true(plugin.last_autoload.loaded)
+        assert.are.equal(clean.id, plugin.last_autoload.session_id)
+    end)
+
     it('autoloads the newest session regardless of cwd', function()
         local old_cwd = mkdir(vim.fn.tempname())
         local new_cwd = mkdir(vim.fn.tempname())

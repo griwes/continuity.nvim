@@ -63,7 +63,11 @@ Continuous saving is opt-in. Set `continuous.enabled = true` to keep one live
 session record updated through editor autocmds and contributor notifications,
 debounced by `continuous.write_debounce_ms`. Named sessions are still saved
 explicitly through `continuity.api.save()`, `continuity.api.capture()`, or
-`:ContinuitySave`.
+`:ContinuitySave`. Live writes do not replace the last deliberate clean
+snapshot: explicit captures and clean Neovim exits also write a `::clean`
+snapshot for the same live session, and that snapshot appears as its own
+loadable picker item. Branch-specific autoload also prefers the clean snapshot
+when it exists.
 
 Continuity keeps `state_file` as a small index and writes full records as
 one JSON file per session under `state_dir`. When only `state_file` is
@@ -105,7 +109,8 @@ Those integration checks degrade cleanly when the sibling repos are not present,
 
 Picker integrations can use `continuity.api.session_items()` directly. Items
 include stable fields such as `id`, `value`, `name`, `cwd`, `branch`,
-`is_current`, `is_last`, `label`, `detail`, `ordinal`, and `record`.
+`is_current`, `is_last`, `snapshot_kind`, `base_id`, `label`, `detail`,
+`ordinal`, and `record`.
 
 ## Development
 

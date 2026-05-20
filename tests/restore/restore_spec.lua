@@ -51,6 +51,24 @@ describe('continuity restore execution', function()
         return plugin
     end
 
+    local function close_other_tabpages()
+        local current = vim.api.nvim_get_current_tabpage()
+
+        for _, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
+            if tabpage ~= current and vim.api.nvim_tabpage_is_valid(tabpage) then
+                pcall(vim.api.nvim_win_close, vim.api.nvim_tabpage_get_win(tabpage), true)
+            end
+        end
+
+        if vim.api.nvim_tabpage_is_valid(current) then
+            vim.api.nvim_set_current_tabpage(current)
+        end
+    end
+
+    local function open_file_tabpage(path)
+        return vim.api.nvim_open_tabpage(vim.fn.bufadd(path), true, {})
+    end
+
     ---@param layout any
     ---@return any
     local function layout_buffer_names(layout)
@@ -77,7 +95,7 @@ describe('continuity restore execution', function()
         reset_modules()
         state_file = vim.fn.tempname()
         setup_plugin()
-        vim.cmd('silent! tabonly!')
+        close_other_tabpages()
         vim.cmd('silent! only!')
         vim.cmd('enew!')
     end)
@@ -317,7 +335,7 @@ describe('continuity restore execution', function()
 
         assert.is_not_nil(saved.state.nvim)
 
-        vim.cmd('silent! tabonly!')
+        close_other_tabpages()
         vim.cmd('silent! only!')
         vim.cmd('enew!')
 
@@ -367,7 +385,7 @@ describe('continuity restore execution', function()
         })
         local saved_shape = layout_buffer_names(saved.state.nvim.tabs[1].layout)
 
-        vim.cmd('silent! tabonly!')
+        close_other_tabpages()
         vim.cmd('silent! only!')
         vim.cmd('enew!')
 
@@ -439,7 +457,7 @@ describe('continuity restore execution', function()
         vim.fn.writefile({ 'second' }, second)
 
         vim.cmd.edit(vim.fn.fnameescape(first))
-        vim.cmd.tabnew(vim.fn.fnameescape(second))
+        open_file_tabpage(second)
 
         local saved = plugin.api.capture({
             id = 'structured-tabs',
@@ -447,7 +465,7 @@ describe('continuity restore execution', function()
             cwd = root,
         })
 
-        vim.cmd('silent! tabonly!')
+        close_other_tabpages()
         vim.cmd('enew!')
 
         local report = plugin.api.execute_restore(saved.id, {

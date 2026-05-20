@@ -99,7 +99,9 @@ local function persist_now()
         return
     end
 
-    storage.save(state.record)
+    storage.save(state.record, {
+        update_last = false,
+    })
 end
 
 local function refresh_contributors()
@@ -125,6 +127,9 @@ local function flush_now()
     refresh_all_state()
     stop_timer()
     persist_now()
+    if state.record ~= nil then
+        storage.save_clean_snapshot(state.record)
+    end
 end
 
 local function schedule_persist()

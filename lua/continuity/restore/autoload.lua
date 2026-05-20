@@ -105,7 +105,9 @@ function M.select(policy)
     end
 
     if policy == 'cwd_branch' then
-        return storage.get(session_key.current({ use_git_branch = true }).id)
+        local id = session_key.current({ use_git_branch = true }).id
+
+        return storage.get(storage.clean_snapshot_id(id)) or storage.get(id)
     end
 
     if policy == 'last' then

@@ -17,6 +17,26 @@ local function normalize_name(name)
     return vim.fs.normalize(name)
 end
 
+---@param bufnr? integer
+---@return integer
+local function open_tabpage(bufnr)
+    return vim.api.nvim_open_tabpage(bufnr or 0, true, {})
+end
+
+local function close_other_tabpages()
+    local current = vim.api.nvim_get_current_tabpage()
+
+    for _, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
+        if tabpage ~= current and vim.api.nvim_tabpage_is_valid(tabpage) then
+            pcall(vim.api.nvim_win_close, vim.api.nvim_tabpage_get_win(tabpage), true)
+        end
+    end
+
+    if vim.api.nvim_tabpage_is_valid(current) then
+        pcall(vim.api.nvim_set_current_tabpage, current)
+    end
+end
+
 ---@param record continuity.Record
 ---@return table<integer, continuity.BufferState>
 local function buffers_by_saved_id(record)
@@ -351,13 +371,13 @@ function M.restore(record)
     local buffers = buffers_by_saved_id(record)
     local tabs = nvim_state.tabs
 
-    vim.cmd('silent! tabonly!')
+    close_other_tabpages()
     vim.cmd('silent! only!')
     ensure_saved_buffers(buffers, report)
 
     for index, tab in ipairs(tabs) do
         if index > 1 then
-            vim.cmd('tabnew')
+            open_tabpage()
         end
 
         restore_tab(tab, buffers, report)

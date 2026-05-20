@@ -83,6 +83,28 @@ local function index_entry(record)
     }
 end
 
+---@param id string
+---@return boolean
+local function is_clean_snapshot_id(id)
+    return id:sub(-7) == '::clean'
+end
+
+---@param id string
+---@return string
+local function clean_snapshot_base_id(id)
+    if is_clean_snapshot_id(id) then
+        return id:sub(1, -8)
+    end
+
+    return id
+end
+
+---@param id string
+---@return string
+local function clean_snapshot_id(id)
+    return string.format('%s::clean', clean_snapshot_base_id(id))
+end
+
 local function persist_index()
     write_json(state_file(), {
         version = CURRENT_VERSION,
@@ -125,15 +147,52 @@ function sorted_sessions()
 end
 
 ---@param record continuity.Record
+---@param opts? { update_last?: boolean }
 ---@return continuity.Record
-function M.save(record)
+function M.save(record, opts)
     local restored = model.new_record(vim.tbl_extend('force', vim.deepcopy(record), {
         updated_at = os.time(),
     }))
     state.sessions[restored.id] = restored
-    state.last_session_id = restored.id
+    if opts == nil or opts.update_last ~= false then
+        state.last_session_id = restored.id
+    end
     persist()
     return vim.deepcopy(restored)
+end
+
+---@param record continuity.Record
+---@return continuity.Record
+function M.save_clean_snapshot(record)
+    local base_id = clean_snapshot_base_id(record.id)
+    local snapshot = model.new_record(vim.tbl_extend('force', vim.deepcopy(record), {
+        id = clean_snapshot_id(base_id),
+        name = string.format('%s clean snapshot', record.name),
+    }))
+
+    snapshot.state.continuity = snapshot.state.continuity or {}
+    snapshot.state.continuity.snapshot = {
+        kind = 'clean',
+        base_id = base_id,
+    }
+
+    return M.save(snapshot)
+end
+
+---@param id string
+---@return string
+function M.clean_snapshot_id(id)
+    return clean_snapshot_id(id)
+end
+
+---@param id string
+---@return string?
+function M.clean_snapshot_base_id(id)
+    if not is_clean_snapshot_id(id) then
+        return nil
+    end
+
+    return clean_snapshot_base_id(id)
 end
 
 ---@param opts? { id?: string, name?: string, cwd?: string, state?: table<string, any>, contributors?: table<string, any> }
@@ -190,13 +249,24 @@ function M.delete(id)
     end
 
     state.sessions[id] = nil
-    if state.last_session_id == id then
+    if not is_clean_snapshot_id(id) then
+        state.sessions[clean_snapshot_id(id)] = nil
+    end
+    if
+        state.last_session_id == id or (not is_clean_snapshot_id(id) and state.last_session_id == clean_snapshot_id(id))
+    then
         state.last_session_id = nil
     end
 
     local path = session_path(id)
     if vim.fn.filereadable(path) == 1 then
         vim.fn.delete(path)
+    end
+    if not is_clean_snapshot_id(id) then
+        local clean_path = session_path(clean_snapshot_id(id))
+        if vim.fn.filereadable(clean_path) == 1 then
+            vim.fn.delete(clean_path)
+        end
     end
 
     persist()

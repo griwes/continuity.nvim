@@ -99,6 +99,36 @@ describe('continuity commands', function()
         assert.are.same({ item.label }, plugin.api.session_lines())
     end)
 
+    it('exposes clean snapshots as loadable picker items', function()
+        local plugin = setup({
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 0,
+            },
+        }, {
+            clear = false,
+        })
+
+        local saved = plugin.api.capture({
+            name = 'alpha',
+        })
+        local clean_id = saved.id .. '::clean'
+        local clean_item
+
+        for _, item in ipairs(plugin.api.session_items()) do
+            if item.id == clean_id then
+                clean_item = item
+                break
+            end
+        end
+
+        assert.is_not_nil(clean_item)
+        assert.are.equal(clean_id, clean_item.value)
+        assert.are.equal('clean', clean_item.snapshot_kind)
+        assert.are.equal(saved.id, clean_item.base_id)
+        assert.is_true(clean_item.label:find('clean', 1, true) ~= nil)
+    end)
+
     it('saves the current session through ContinuitySave', function()
         local plugin = setup()
 

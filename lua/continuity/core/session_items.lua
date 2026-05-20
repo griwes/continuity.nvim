@@ -13,6 +13,8 @@ local M = {}
 ---@field updated_at integer
 ---@field is_current boolean
 ---@field is_last boolean
+---@field snapshot_kind? string
+---@field base_id? string
 ---@field label string
 ---@field detail string
 ---@field ordinal string
@@ -31,11 +33,28 @@ local function record_branch(record)
 end
 
 ---@param record continuity.Record
+---@return string?, string?
+local function record_snapshot(record)
+    local continuity_state = type(record.state.continuity) == 'table' and record.state.continuity or nil
+    local snapshot = continuity_state ~= nil
+            and type(continuity_state.snapshot) == 'table'
+            and continuity_state.snapshot
+        or nil
+
+    if snapshot == nil or type(snapshot.kind) ~= 'string' then
+        return nil, nil
+    end
+
+    return snapshot.kind, snapshot.base_id
+end
+
+---@param record continuity.Record
 ---@param current_id string
 ---@param last_id? string
 ---@return continuity.SessionItem
 function M.item(record, current_id, last_id)
     local branch = record_branch(record)
+    local snapshot_kind, base_id = record_snapshot(record)
     local markers = {}
 
     if record.id == current_id then
@@ -44,6 +63,10 @@ function M.item(record, current_id, last_id)
 
     if record.id == last_id then
         table.insert(markers, 'last')
+    end
+
+    if snapshot_kind ~= nil then
+        table.insert(markers, snapshot_kind)
     end
 
     local detail_parts = {
@@ -78,8 +101,12 @@ function M.item(record, current_id, last_id)
             record.name,
             record.cwd,
             branch or '',
+            snapshot_kind or '',
+            base_id or '',
         }, ' '),
         record = vim.deepcopy(record),
+        snapshot_kind = snapshot_kind,
+        base_id = base_id,
     }
 end
 

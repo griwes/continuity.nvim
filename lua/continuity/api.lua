@@ -76,11 +76,20 @@ end
 ---@param opts? { id?: string, name?: string, cwd?: string, state?: table<string, any>, contributors?: table<string, any> }
 ---@return continuity.Record
 function M.save(opts)
+    local current = live.record()
+    local saved
+
     if opts ~= nil and opts.id ~= nil then
-        return storage.save(opts)
+        saved = storage.save(opts)
+    else
+        saved = storage.create(opts)
     end
 
-    return storage.create(opts)
+    if current ~= nil and saved.id == current.id then
+        storage.save_clean_snapshot(saved)
+    end
+
+    return saved
 end
 
 ---@param opts? { id?: string, name?: string, cwd?: string, state?: table<string, any> }

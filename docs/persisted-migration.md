@@ -106,6 +106,13 @@ current cwd and Git branch.
 Live and named sessions use the same fragmented JSON substrate. No Vim session
 files are written.
 
+Live writes intentionally keep updating the live record, while explicit
+captures and clean Neovim exits also write a sibling `::clean` snapshot. The
+clean snapshot remains loadable from `:ContinuityLoad` / `:ContinuityList` even
+after later live writes update the primary live record.
+Branch-specific autoload prefers that clean snapshot when it is present, falling
+back to the primary live record only when no clean snapshot has been written.
+
 ## Plugin-Owned State
 
 Continuity is not a `:mksession` wrapper. Plugins can register contributors

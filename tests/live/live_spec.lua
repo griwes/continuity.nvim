@@ -2,12 +2,48 @@ describe('continuity live state', function()
     local state_file
     local test_git = require('tests.helpers.git')
 
+    local function close_other_tabpages()
+        local current = vim.api.nvim_get_current_tabpage()
+
+        for _, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
+            if tabpage ~= current and vim.api.nvim_tabpage_is_valid(tabpage) then
+                pcall(vim.api.nvim_win_close, vim.api.nvim_tabpage_get_win(tabpage), true)
+            end
+        end
+
+        if vim.api.nvim_tabpage_is_valid(current) then
+            vim.api.nvim_set_current_tabpage(current)
+        end
+    end
+
+    local function open_file_tabpage(path)
+        return vim.api.nvim_open_tabpage(vim.fn.bufadd(path), true, {})
+    end
+
+    local function isolate_fresh_tabpage()
+        local tabpage = vim.api.nvim_open_tabpage(0, true, {})
+
+        for _, candidate in ipairs(vim.api.nvim_list_tabpages()) do
+            if candidate ~= tabpage and vim.api.nvim_tabpage_is_valid(candidate) then
+                vim.api.nvim_set_current_tabpage(candidate)
+                local ok, err = pcall(vim.api.nvim_win_close, vim.api.nvim_tabpage_get_win(candidate), true)
+
+                if not ok then
+                    error(err)
+                end
+            end
+        end
+
+        vim.api.nvim_set_current_tabpage(tabpage)
+    end
+
     before_each(function()
         package.loaded.continuity = nil
         package.loaded['continuity.api'] = nil
         package.loaded['continuity.core.config'] = nil
         package.loaded['continuity.contributors.registry'] = nil
         package.loaded['continuity.core.model'] = nil
+        package.loaded['continuity.core.session_items'] = nil
         package.loaded['continuity.core.session_key'] = nil
         package.loaded['continuity.live.state'] = nil
         package.loaded['continuity.restore.plan'] = nil
@@ -79,6 +115,77 @@ describe('continuity live state', function()
         assert.is_true(persisted)
     end)
 
+    it('keeps the explicit clean snapshot separate from later live writes', function()
+        local plugin = require('continuity')
+        local value = 'alpha'
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 0,
+            },
+        })
+
+        plugin.api.register_contributor('workspace', {
+            capture = function()
+                return {
+                    value = value,
+                }
+            end,
+        })
+
+        local saved = plugin.api.capture({
+            name = 'Dogfood',
+        })
+        local clean_id = saved.id .. '::clean'
+
+        value = 'beta'
+        plugin.api.notify_contributor_changed('workspace')
+
+        local live_record = assert(plugin.api.load(saved.id))
+        local clean_record = assert(plugin.api.load(clean_id))
+        local clean_item
+
+        for _, item in ipairs(plugin.api.session_items()) do
+            if item.id == clean_id then
+                clean_item = item
+                break
+            end
+        end
+
+        assert.are.equal('session:live', saved.id)
+        assert.are.equal('beta', live_record.contributors.workspace.value)
+        assert.are.equal('alpha', clean_record.contributors.workspace.value)
+        assert.is_not_nil(clean_item)
+        assert.are.equal('clean', clean_item.snapshot_kind)
+        assert.are.equal(saved.id, clean_item.base_id)
+        assert.is_true(clean_item.is_last)
+    end)
+
+    it('keeps a clean snapshot when the active live session is saved directly', function()
+        local plugin = require('continuity')
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                session_id = 'session:direct-save',
+                write_debounce_ms = 0,
+            },
+        })
+
+        plugin.api.save({
+            id = 'session:direct-save',
+            name = 'direct',
+            state = {
+                marker = 'clean',
+            },
+        })
+
+        assert.are.equal('clean', plugin.api.load('session:direct-save::clean').state.marker)
+    end)
+
     it('recaptures contributor-owned live state on layout events', function()
         local plugin = require('continuity')
         local value = 'alpha'
@@ -133,6 +240,7 @@ describe('continuity live state', function()
         })
 
         assert.are.equal('final', plugin.api.load('session:live').contributors.workspace.value)
+        assert.are.equal('final', plugin.api.load('session:live::clean').contributors.workspace.value)
     end)
 
     it('ignores contributor notifications when continuous state is disabled', function()
@@ -233,7 +341,7 @@ describe('continuity live state', function()
     it('captures the structured window layout in the live session', function()
         local plugin = require('continuity')
 
-        vim.cmd('silent! tabonly!')
+        close_other_tabpages()
         vim.cmd('silent! only!')
 
         plugin.setup({
@@ -259,7 +367,7 @@ describe('continuity live state', function()
         local first = vim.fs.joinpath(root, 'first.txt')
         local second = vim.fs.joinpath(root, 'second.txt')
 
-        vim.cmd('silent! tabonly!')
+        close_other_tabpages()
         vim.cmd('silent! only!')
         vim.cmd('enew!')
 
@@ -315,7 +423,7 @@ describe('continuity live state', function()
     it('does not persist hidden unnamed scratch buffers', function()
         local plugin = require('continuity')
 
-        vim.cmd('silent! tabonly!')
+        close_other_tabpages()
         vim.cmd('silent! only!')
         vim.cmd('enew!')
 
@@ -348,7 +456,7 @@ describe('continuity live state', function()
         local right = vim.fs.joinpath(root, 'README.md')
         local other = vim.fs.joinpath(root, 'other.txt')
 
-        vim.cmd('silent! tabonly!')
+        close_other_tabpages()
         vim.cmd('silent! only!')
         vim.cmd('enew!')
 
@@ -371,7 +479,7 @@ describe('continuity live state', function()
         plugin.api.sync_live_state()
 
         vim.cmd.enew()
-        vim.cmd.tabnew(vim.fn.fnameescape(other))
+        open_file_tabpage(other)
 
         local saved = plugin.api.capture({
             id = 'remember-file-window',
@@ -396,14 +504,16 @@ describe('continuity live state', function()
     it('excludes floating UI windows and their unlisted buffers from builtin state capture', function()
         local plugin = require('continuity')
 
-        vim.cmd('silent! tabonly!')
+        isolate_fresh_tabpage()
         vim.cmd('silent! only!')
         vim.cmd('enew')
 
         local uri_buffer = vim.api.nvim_get_current_buf()
+        local uri_window = vim.api.nvim_get_current_win()
+        pcall(vim.api.nvim_win_del_var, 0, 'continuity_last_file_buffer')
         vim.bo[uri_buffer].buftype = 'nofile'
         vim.bo[uri_buffer].swapfile = false
-        vim.api.nvim_buf_set_name(uri_buffer, 'acp://session/test')
+        vim.api.nvim_buf_set_name(uri_buffer, 'legate://session/test')
         vim.bo[uri_buffer].buflisted = false
 
         local float_buffer = vim.api.nvim_create_buf(false, true)
@@ -421,6 +531,10 @@ describe('continuity live state', function()
             state_file = state_file,
         })
 
+        vim.api.nvim_set_current_win(uri_window)
+        vim.api.nvim_win_set_buf(uri_window, uri_buffer)
+        pcall(vim.api.nvim_win_del_var, uri_window, 'continuity_last_file_buffer')
+
         local saved = plugin.api.capture()
         local saved_buffers = {}
 
@@ -428,8 +542,18 @@ describe('continuity live state', function()
             saved_buffers[buffer.id] = buffer
         end
 
-        assert.are.equal(1, #saved.state.nvim.tabs[1].windows)
-        assert.are.equal(uri_buffer, saved.state.nvim.tabs[1].windows[1].buffer)
+        local current_tab
+
+        for _, tab in ipairs(saved.state.nvim.tabs or {}) do
+            if tab.id == saved.state.nvim.current.tab then
+                current_tab = tab
+                break
+            end
+        end
+
+        assert.is_not_nil(current_tab)
+        assert.are.equal(1, #current_tab.windows)
+        assert.are.equal(uri_buffer, current_tab.windows[1].buffer)
         assert.is_not_nil(saved_buffers[uri_buffer])
         assert.is_nil(saved_buffers[float_buffer])
 
