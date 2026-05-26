@@ -46,8 +46,10 @@ describe('continuity live state', function()
         package.loaded['continuity.core.session_items'] = nil
         package.loaded['continuity.core.session_key'] = nil
         package.loaded['continuity.live.state'] = nil
+        package.loaded['continuity.persistence.atomic'] = nil
         package.loaded['continuity.restore.plan'] = nil
         package.loaded['continuity.restore.execute'] = nil
+        package.loaded['continuity.restore.late'] = nil
         package.loaded['continuity.persistence.storage'] = nil
 
         state_file = vim.fn.tempname()
@@ -241,6 +243,71 @@ describe('continuity live state', function()
 
         assert.are.equal('final', plugin.api.load('session:live').contributors.workspace.value)
         assert.are.equal('final', plugin.api.load('session:live::clean').contributors.workspace.value)
+    end)
+
+    it('isolates contributor capture failures while flushing last-good state before exit', function()
+        local plugin = require('continuity')
+        local healthy_value = 'initial'
+        local unstable_value = 'last-good'
+        local should_throw = false
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                write_debounce_ms = 1000,
+            },
+        })
+
+        plugin.api.register_contributor('healthy', {
+            capture = function()
+                return {
+                    value = healthy_value,
+                }
+            end,
+        })
+        plugin.api.register_contributor('unstable', {
+            capture = function()
+                if should_throw then
+                    error('injected capture failure')
+                end
+
+                return {
+                    value = unstable_value,
+                }
+            end,
+        })
+
+        healthy_value = 'final'
+        unstable_value = 'must-not-replace-last-good'
+        should_throw = true
+
+        local notifications = {}
+        local original_notify = vim.notify
+        vim.notify = function(message, level)
+            table.insert(notifications, {
+                message = message,
+                level = level,
+            })
+        end
+
+        local ok, err = pcall(vim.api.nvim_exec_autocmds, 'VimLeavePre', {
+            modeline = false,
+        })
+        vim.notify = original_notify
+
+        assert.is_true(ok, err)
+        assert.are.equal(1, #notifications)
+        assert.are.equal(vim.log.levels.ERROR, notifications[1].level)
+        assert.is_true(notifications[1].message:find('injected capture failure', 1, true) ~= nil)
+
+        local live_record = assert(plugin.api.load('session:live'))
+        local clean_record = assert(plugin.api.load('session:live::clean'))
+
+        assert.are.equal('final', live_record.contributors.healthy.value)
+        assert.are.equal('last-good', live_record.contributors.unstable.value)
+        assert.are.equal('final', clean_record.contributors.healthy.value)
+        assert.are.equal('last-good', clean_record.contributors.unstable.value)
     end)
 
     it('ignores contributor notifications when continuous state is disabled', function()
@@ -591,6 +658,102 @@ describe('continuity live state', function()
         assert.is_true(main.id:find('main', 1, true) ~= nil)
         assert.is_true(feature.id:find('feature_live', 1, true) ~= nil)
         assert.are.equal('feature/live', plugin.api.load(feature.id).state.continuity.session_key.branch)
+    end)
+
+    it('flushes the old branch session before replacing a pending debounce', function()
+        local plugin = require('continuity')
+        local original_cwd = vim.fn.getcwd()
+        local repo = test_git.repo('continuity-live-branch-debounce')
+        local value = 'main-pending'
+
+        vim.api.nvim_set_current_dir(repo)
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                session_id = 'auto',
+                write_debounce_ms = 1000,
+            },
+            session_key = {
+                use_git_branch = true,
+            },
+        })
+        plugin.api.register_contributor('workspace', {
+            capture = function()
+                return {
+                    value = value,
+                }
+            end,
+        })
+
+        local main = assert(plugin.api.live_state())
+
+        assert.is_nil(plugin.api.load(main.id))
+
+        value = 'feature'
+        test_git.run({ 'checkout', '-b', 'feature/debounce' }, repo)
+        plugin.api.sync_live_state()
+
+        local feature = assert(plugin.api.live_state())
+        local saved_main = assert(plugin.api.load(main.id))
+        local clean_main = assert(plugin.api.load(main.id .. '::clean'))
+
+        assert.are_not.equal(main.id, feature.id)
+        assert.are.equal('main-pending', saved_main.contributors.workspace.value)
+        assert.are.equal('main-pending', clean_main.contributors.workspace.value)
+        assert.is_nil(plugin.api.load(feature.id))
+
+        require('continuity.live.state').stop()
+        vim.api.nvim_set_current_dir(original_cwd)
+    end)
+
+    it('flushes the old cwd session before replacing a pending debounce', function()
+        local plugin = require('continuity')
+        local original_cwd = vim.fn.getcwd()
+        local first_cwd = vim.fn.tempname()
+        local second_cwd = vim.fn.tempname()
+
+        vim.fn.mkdir(first_cwd, 'p')
+        vim.fn.mkdir(second_cwd, 'p')
+        vim.api.nvim_set_current_dir(first_cwd)
+
+        plugin.setup({
+            state_file = state_file,
+            continuous = {
+                enabled = true,
+                session_id = 'auto',
+                write_debounce_ms = 1000,
+            },
+            session_key = {
+                use_git_branch = false,
+            },
+        })
+        plugin.api.register_contributor('workspace', {
+            capture = function()
+                return {
+                    value = 'first-pending',
+                }
+            end,
+        })
+
+        local first = assert(plugin.api.live_state())
+
+        assert.is_nil(plugin.api.load(first.id))
+
+        vim.api.nvim_set_current_dir(second_cwd)
+        plugin.api.sync_live_state()
+
+        local second = assert(plugin.api.live_state())
+        local saved_first = assert(plugin.api.load(first.id))
+        local clean_first = assert(plugin.api.load(first.id .. '::clean'))
+
+        assert.are_not.equal(first.id, second.id)
+        assert.are.equal('first-pending', saved_first.contributors.workspace.value)
+        assert.are.equal('first-pending', clean_first.contributors.workspace.value)
+        assert.is_nil(plugin.api.load(second.id))
+
+        require('continuity.live.state').stop()
+        vim.api.nvim_set_current_dir(original_cwd)
     end)
 
     it('does not write Vim session files for auto live sessions', function()

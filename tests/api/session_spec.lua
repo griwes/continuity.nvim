@@ -276,6 +276,39 @@ describe('session', function()
         assert.are.equal('/tmp/workspace', saved.contributors.workspace.cwd)
     end)
 
+    it('excludes plugin-owned transient windows and buffers from builtin layout capture', function()
+        local plugin = require('continuity')
+        local original_win = vim.api.nvim_get_current_win()
+
+        vim.cmd('belowright split')
+        local transient_win = vim.api.nvim_get_current_win()
+        local transient_buf = vim.api.nvim_create_buf(false, true)
+
+        vim.api.nvim_win_set_buf(transient_win, transient_buf)
+        vim.w[transient_win].legate_surface_role = 'input'
+        vim.b[transient_buf].legate_surface_role = 'input'
+
+        local saved = plugin.api.capture({
+            name = 'transient-filter',
+        })
+
+        pcall(vim.api.nvim_win_close, transient_win, true)
+        vim.api.nvim_set_current_win(original_win)
+
+        local nvim_state = saved.state.nvim
+
+        for _, buffer in ipairs(nvim_state.buffers) do
+            assert.are_not.equal(transient_buf, buffer.id)
+        end
+
+        for _, tab in ipairs(nvim_state.tabs) do
+            for _, window in ipairs(tab.windows or {}) do
+                assert.are_not.equal(transient_win, window.id)
+                assert.are_not.equal(transient_buf, window.buffer)
+            end
+        end
+    end)
+
     it('restores contributor-owned session state from disk', function()
         local plugin = require('continuity')
 

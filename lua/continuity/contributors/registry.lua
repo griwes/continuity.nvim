@@ -24,18 +24,46 @@ function M.names()
     return names
 end
 
+---@param name string
+---@return boolean, any
+function M.capture_one(name)
+    local contributor = contributors[name]
+
+    assert(contributor ~= nil, string.format('Unknown session contributor: %s', name))
+    assert(
+        type(contributor.capture) == 'function',
+        string.format('Session contributor %s does not expose capture()', name)
+    )
+
+    local ok, value = xpcall(contributor.capture, debug.traceback)
+
+    if not ok then
+        pcall(
+            vim.notify,
+            string.format('Continuity contributor %s capture failed: %s', name, value),
+            vim.log.levels.ERROR
+        )
+        return false, nil
+    end
+
+    return true, value
+end
+
+---@param previous? table<string, any>
 ---@return table<string, any>
-function M.capture()
-    local captured = {}
+function M.capture(previous)
+    local captured = vim.deepcopy(previous or {})
 
     for _, name in ipairs(M.names()) do
         local contributor = contributors[name]
 
         if type(contributor.capture) == 'function' then
-            local value = contributor.capture()
+            local ok, value = M.capture_one(name)
 
-            if value ~= nil then
+            if ok and value ~= nil then
                 captured[name] = vim.deepcopy(value)
+            elseif ok then
+                captured[name] = nil
             end
         end
     end

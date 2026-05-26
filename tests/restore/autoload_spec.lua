@@ -14,6 +14,7 @@ describe('continuity autoload', function()
         package.loaded['continuity.persistence.storage'] = nil
         package.loaded['continuity.restore.autoload'] = nil
         package.loaded['continuity.restore.execute'] = nil
+        package.loaded['continuity.restore.late'] = nil
         package.loaded['continuity.restore.plan'] = nil
     end
 
@@ -398,6 +399,126 @@ describe('continuity autoload', function()
             late_registration = true,
             restore_layout = false,
         }, restored.opts)
+    end)
+
+    local function late_restore_fixture()
+        local cwd = mkdir(vim.fn.tempname())
+
+        write_state({
+            {
+                id = 'session:providers',
+                name = 'providers',
+                cwd = cwd,
+                state = {},
+                contributors = {
+                    terminal = { value = 'terminal' },
+                    workspace = { value = 'workspace' },
+                },
+                created_at = 1,
+                updated_at = 1,
+            },
+        })
+
+        vim.api.nvim_set_current_dir(cwd)
+
+        return setup({
+            autoload = {
+                policy = 'cwd',
+            },
+        })
+    end
+
+    ---@param calls string[]
+    ---@param expected_count integer
+    local function wait_for_late_restore(calls, expected_count)
+        if #calls < expected_count then
+            vim.api.nvim_exec_autocmds('VimEnter', {})
+            local restored = vim.wait(1000, function()
+                return #calls >= expected_count
+            end)
+
+            assert.is_true(restored)
+        end
+    end
+
+    local function drain_late_restore()
+        vim.api.nvim_exec_autocmds('VimEnter', {})
+        vim.wait(20)
+    end
+
+    ---@param calls string[]
+    ---@return continuity.Contributor
+    local function workspace_contributor(calls)
+        return {
+            restore_phase = 'before_layout',
+            plan_restore = function(payload)
+                return {
+                    {
+                        id = 'workspace:restore',
+                        kind = 'workspace.restore',
+                        payload = payload,
+                    },
+                }
+            end,
+            restore = function(step)
+                table.insert(calls, step.contributor)
+            end,
+        }
+    end
+
+    ---@param calls string[]
+    ---@param depends_on_workspace? boolean
+    ---@param step_id? string
+    ---@return continuity.Contributor
+    local function terminal_contributor(calls, depends_on_workspace, step_id)
+        return {
+            restore_phase = 'after_layout',
+            restore_after = depends_on_workspace == false and nil or { 'workspace' },
+            plan_restore = function(payload)
+                return {
+                    {
+                        id = step_id or 'terminal:restore',
+                        kind = 'terminal.restore',
+                        payload = payload,
+                    },
+                }
+            end,
+            restore = function(step)
+                table.insert(calls, step.contributor)
+            end,
+        }
+    end
+
+    it('defers late dependencies and does not repeat settled contributors with new step ids', function()
+        local plugin = late_restore_fixture()
+        local calls = {}
+        local terminal = terminal_contributor(calls)
+
+        plugin.api.register_contributor('terminal', terminal)
+        drain_late_restore()
+
+        assert.are.same({}, calls)
+
+        plugin.api.register_contributor('workspace', workspace_contributor(calls))
+        wait_for_late_restore(calls, 2)
+
+        assert.are.same({ 'workspace', 'terminal' }, calls)
+
+        plugin.api.register_contributor('terminal', terminal_contributor(calls, true, 'terminal:replacement'))
+        drain_late_restore()
+
+        assert.are.same({ 'workspace', 'terminal' }, calls)
+    end)
+
+    it('preserves late contributor phases when after-layout registers first', function()
+        local plugin = late_restore_fixture()
+        local calls = {}
+
+        plugin.api.register_contributor('terminal', terminal_contributor(calls, false))
+        plugin.api.register_contributor('workspace', workspace_contributor(calls))
+        wait_for_late_restore(calls, 2)
+
+        assert.are.same({ 'workspace', 'terminal' }, calls)
     end)
 
     it('reports a safe miss instead of failing startup', function()

@@ -109,6 +109,30 @@ local function resolve_window_buffer(win, bufnr)
 end
 
 ---@param bufnr integer
+---@return boolean
+local function is_transient_buffer(bufnr)
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+        return false
+    end
+
+    return vim.b[bufnr].legate_surface_role ~= nil or vim.b[bufnr].continuity_transient_buffer == true
+end
+
+---@param win integer
+---@return boolean
+local function is_transient_window(win)
+    if not vim.api.nvim_win_is_valid(win) then
+        return false
+    end
+
+    local bufnr = vim.api.nvim_win_get_buf(win)
+
+    return vim.w[win].legate_surface_role ~= nil
+        or vim.w[win].continuity_transient_window == true
+        or is_transient_buffer(bufnr)
+end
+
+---@param bufnr integer
 ---@return table?
 local function capture_changelist(bufnr)
     local ok, value = pcall(vim.fn.getchangelist, bufnr)
@@ -158,6 +182,47 @@ local function collect_layout_windows(layout, out)
     end
 end
 
+---@param layout any
+---@return any
+local function prune_transient_layout(layout)
+    if type(layout) ~= 'table' then
+        return nil
+    end
+
+    if layout[1] == 'leaf' then
+        local win = tonumber(layout[2])
+
+        if win == nil or is_transient_window(win) then
+            return nil
+        end
+
+        return layout
+    end
+
+    local children = {}
+
+    for _, child in ipairs(layout[2] or {}) do
+        local pruned = prune_transient_layout(child)
+
+        if pruned ~= nil then
+            table.insert(children, pruned)
+        end
+    end
+
+    if #children == 0 then
+        return nil
+    end
+
+    if #children == 1 then
+        return children[1]
+    end
+
+    return {
+        layout[1],
+        children,
+    }
+end
+
 ---@param tabs continuity.TabState[]
 ---@return table<integer, boolean>
 local function visible_layout_buffers(tabs)
@@ -186,7 +251,7 @@ local function capture_buffers(visible_buffers)
             local path_backed_file = buftype == '' and name ~= '' and vim.uv.fs_stat(name) ~= nil
             local named_or_special = name ~= '' or buftype ~= ''
 
-            if visible or path_backed_file or (listed and named_or_special) then
+            if not is_transient_buffer(buffer) and (visible or path_backed_file or (listed and named_or_special)) then
                 table.insert(buffers, {
                     id = buffer,
                     name = name,
@@ -216,13 +281,13 @@ local function capture_tabs()
 
     for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
         local windows = {}
-        local layout = capture_layout(tab)
+        local layout = prune_transient_layout(capture_layout(tab))
         local layout_windows = {}
 
         collect_layout_windows(layout, layout_windows)
 
         for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-            if layout_windows[window] == true then
+            if layout_windows[window] == true and not is_transient_window(window) then
                 local buffer = resolve_window_buffer(window, vim.api.nvim_win_get_buf(window))
 
                 table.insert(windows, {
@@ -251,13 +316,26 @@ end
 ---@return continuity.NvimState
 function M.capture()
     local tabs = capture_tabs()
+    local current_window = vim.api.nvim_get_current_win()
+    local current_tab = vim.api.nvim_get_current_tabpage()
+    local current_buffer = vim.api.nvim_get_current_buf()
+
+    if is_transient_window(current_window) then
+        for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(current_tab)) do
+            if not is_transient_window(winid) then
+                current_window = winid
+                current_buffer = vim.api.nvim_win_get_buf(winid)
+                break
+            end
+        end
+    end
 
     return {
         cwd = vim.uv.cwd() or vim.fn.getcwd(),
         current = {
-            buffer = vim.api.nvim_get_current_buf(),
-            window = vim.api.nvim_get_current_win(),
-            tab = vim.api.nvim_get_current_tabpage(),
+            buffer = current_buffer,
+            window = current_window,
+            tab = current_tab,
         },
         buffers = capture_buffers(visible_layout_buffers(tabs)),
         tabs = tabs,

@@ -68,11 +68,26 @@ local function stop_timer()
     end
 end
 
+---@param record continuity.Record
+local function persist_record(record)
+    storage.save(record, {
+        update_last = false,
+    })
+end
+
+---@param record continuity.Record
+local function flush_record(record)
+    persist_record(record)
+    storage.save_clean_snapshot(record)
+end
+
 ---@return continuity.Record
 local function ensure_record()
     local session_id = live_session_id()
 
     if state.record ~= nil and state.record.id ~= session_id then
+        flush_record(state.record)
+        stop_timer()
         state.record = nil
     end
 
@@ -99,9 +114,7 @@ local function persist_now()
         return
     end
 
-    storage.save(state.record, {
-        update_last = false,
-    })
+    persist_record(state.record)
 end
 
 local function refresh_contributors()
@@ -188,7 +201,11 @@ refresh_contributor = function(name)
         string.format('Session contributor %s does not expose capture()', name)
     )
 
-    local value = contributor.capture()
+    local ok, value = contributors.capture_one(name)
+
+    if not ok then
+        return
+    end
 
     update_record(function(record)
         if value == nil then

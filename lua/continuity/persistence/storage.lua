@@ -1,5 +1,6 @@
 local config = require('continuity.core.config')
 local model = require('continuity.core.model')
+local atomic = require('continuity.persistence.atomic')
 local session_key = require('continuity.core.session_key')
 
 local M = {}
@@ -46,13 +47,6 @@ end
 ---@return string
 local function session_path(id)
     return vim.fs.joinpath(state_dir(), session_filename(id))
-end
-
----@param path string
----@param payload table
-local function write_json(path, payload)
-    vim.fn.mkdir(vim.fn.fnamemodify(path, ':h'), 'p')
-    vim.fn.writefile({ vim.json.encode(payload) }, path)
 end
 
 ---@param path string
@@ -106,7 +100,7 @@ local function clean_snapshot_id(id)
 end
 
 local function persist_index()
-    write_json(state_file(), {
+    atomic.write_json(state_file(), {
         version = CURRENT_VERSION,
         last_session_id = state.last_session_id,
         next_id = state.next_id,
@@ -116,7 +110,7 @@ end
 
 ---@param record continuity.Record
 local function persist_record(record)
-    write_json(session_path(record.id), record)
+    atomic.write_json(session_path(record.id), record)
 end
 
 local function persist()
