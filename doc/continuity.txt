@@ -1,0 +1,55 @@
+*continuity.txt*                    Continuity logical sessions
+
+==============================================================================
+CONTENTS                                                    *continuity-contents*
+
+1. Introduction ........................................... |continuity|
+2. Setup ................................................... |continuity-setup|
+3. Commands ................................................ |continuity-commands|
+4. API ..................................................... |continuity-api|
+5. Health .................................................. |continuity-health|
+
+==============================================================================
+INTRODUCTION                                                    *continuity*
+
+Continuity continuously captures logical editor state into structured JSON and
+restores buffers, tabs, windows, layouts, views, jumps, changes, and registered
+plugin contributors. Neovim 0.11 or newer is required.
+
+==============================================================================
+SETUP                                                  *continuity-setup*
+
+>lua
+    require('continuity').setup({
+        continuous = { enabled = true, session_id = 'auto' },
+        session_key = { use_git_branch = true },
+        autoload = { policy = 'cwd_branch' },
+    })
+<
+
+Autoload policies are "disabled", "cwd", "cwd_branch", and "last".
+
+==============================================================================
+COMMANDS                                            *continuity-commands*
+
+*:ContinuitySave*       Save the current session, with an optional name.
+*:ContinuityList*       Pick and inspect saved sessions.
+*:ContinuityLoad*       Restore a session id, or pick one.
+*:ContinuityDelete*     Delete a session id, or pick one.
+*:ContinuityCurrent*    Show the derived key and active live session.
+
+==============================================================================
+API                                                      *continuity-api*
+
+The root module exposes `api`. Common functions are `capture()`, `save()`,
+`load()`, `list()`, `delete()`, `plan_restore()`, `execute_restore()`, and
+`register_contributor()`.
+
+==============================================================================
+HEALTH                                                *continuity-health*
+
+Run: >vim
+    :checkhealth continuity
+<
+
+vim:tw=78:ts=8:noet:ft=help:norl:

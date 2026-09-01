@@ -1,19 +1,27 @@
 # Continuity
 
-Continuous logical session state for the Neovim plugin orchestration workspace.
+Continuous logical session state for Neovim.
 
 ## Status
 
 Early development. The current slice provides a standalone repo, typed setup/config, a local session registry with save/load/list/delete behavior, opt-in cwd/Git-branch session keys, explicit startup autoload policies, contributor-owned capture hooks, a restore-plan surface, an opt-in continuous live-session tracker with debounced persistence, and a structured JSON restore executor for builtin editor layout. Contributor replay is ordered around the structured layout boundary through `restore_phase`, and jump/change contents are restored through Continuity-owned synthetic ShaDa fragments where Neovim lacks public setters.
 
+## Requirements
+
+- Neovim 0.11 or newer
+- optional provider plugins such as `terminalia.nvim` for contributor-owned
+  state
+
+Linux is the primary supported and CI-tested platform. The project is in early
+development and currently publishes from `main` without a stable release tag.
+
 ## Installation
 
-Example local `lazy.nvim` spec:
+With `lazy.nvim`:
 
 ```lua
 {
-    dir = vim.fn.expand('~/projects/neovim-plugin-orchestration/continuity.nvim'),
-    name = 'continuity.nvim',
+    'griwes/continuity.nvim',
     opts = {
         continuous = {
             enabled = true,
@@ -34,6 +42,9 @@ Example local `lazy.nvim` spec:
     },
 }
 ```
+
+Run `:checkhealth continuity` after installation. See `:help continuity` for a
+compact command and API reference.
 
 For a direct replacement of the current persisted.nvim-style setup, see
 [`docs/persisted-migration.md`](docs/persisted-migration.md).
@@ -118,3 +129,7 @@ include stable fields such as `id`, `value`, `name`, `cwd`, `branch`,
 - formatting is enforced with Stylua
 - Lua modules should carry LuaLS annotations and doc comments
 - CI lives in `.github/workflows/ci.yml`
+
+## License
+
+Apache-2.0. See [`LICENSE`](LICENSE).

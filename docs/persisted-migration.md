@@ -31,8 +31,7 @@ The matching Continuity shape is:
 ```lua
 return {
     {
-        dir = vim.fn.expand('~/projects/neovim-plugin-orchestration/continuity.nvim'),
-        name = 'continuity.nvim',
+        'griwes/continuity.nvim',
         main = 'continuity',
         lazy = false,
         opts = {
