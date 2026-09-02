@@ -1,4 +1,11 @@
 describe('Terminalia integration', function()
+    if vim.env.CONTINUITY_REQUIRE_TERMINALIA_INTEGRATION ~= '1' then
+        it('requires the explicit integration gate', function()
+            pending('set CONTINUITY_REQUIRE_TERMINALIA_INTEGRATION=1 to run the Terminalia integration gate')
+        end)
+        return
+    end
+
     local continuity
     local terminalia
     local continuity_state_file
@@ -6,11 +13,6 @@ describe('Terminalia integration', function()
     local terminalia_history_dir
 
     before_each(function()
-        if vim.env.CONTINUITY_REQUIRE_TERMINALIA_INTEGRATION ~= '1' then
-            pending('set CONTINUITY_REQUIRE_TERMINALIA_INTEGRATION=1 to run the Terminalia integration gate')
-            return
-        end
-
         continuity_state_file = vim.fn.tempname()
         terminalia_state_file = vim.fn.tempname()
         terminalia_history_dir = vim.fn.tempname()
@@ -53,11 +55,17 @@ describe('Terminalia integration', function()
                 wipe_contributors = true,
             })
         end
-        vim.fn.delete(continuity_state_file or '')
-        vim.fn.delete((continuity_state_file or '') .. '.d', 'rf')
-        vim.fn.delete(terminalia_state_file or '')
-        vim.fn.delete((terminalia_state_file or '') .. '.d', 'rf')
-        vim.fn.delete(terminalia_history_dir or '', 'rf')
+        if continuity_state_file ~= nil then
+            vim.fn.delete(continuity_state_file)
+            vim.fn.delete(continuity_state_file .. '.d', 'rf')
+        end
+        if terminalia_state_file ~= nil then
+            vim.fn.delete(terminalia_state_file)
+            vim.fn.delete(terminalia_state_file .. '.d', 'rf')
+        end
+        if terminalia_history_dir ~= nil then
+            vim.fn.delete(terminalia_history_dir, 'rf')
+        end
     end)
 
     it('captures immutable terminal state and executes its restore plan', function()

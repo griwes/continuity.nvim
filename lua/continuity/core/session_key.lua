@@ -66,7 +66,7 @@ function M.current(opts)
         table.insert(label_parts, branch)
     end
 
-    local digest = vim.fn.sha256(table.concat(key_parts, '\0')):sub(1, 12)
+    local digest = vim.fn.sha256(vim.json.encode(key_parts)):sub(1, 12)
     local id_parts = { 'session', slug(basename) }
 
     if branch ~= nil then

@@ -1,4 +1,5 @@
 local shada = require('continuity.persistence.shada')
+local tabpage = require('continuity.compat.tabpage')
 
 local M = {}
 
@@ -20,7 +21,7 @@ end
 ---@param bufnr? integer
 ---@return integer
 local function open_tabpage(bufnr)
-    return vim.api.nvim_open_tabpage(bufnr or 0, true, {})
+    return tabpage.open(bufnr)
 end
 
 local function close_other_tabpages()

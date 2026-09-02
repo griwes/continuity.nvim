@@ -1,5 +1,6 @@
 describe('continuity restore execution', function()
     local state_file
+    local tabpage = require('continuity.compat.tabpage')
 
     ---@param name string
     ---@return string
@@ -66,7 +67,7 @@ describe('continuity restore execution', function()
     end
 
     local function open_file_tabpage(path)
-        return vim.api.nvim_open_tabpage(vim.fn.bufadd(path), true, {})
+        return tabpage.open(vim.fn.bufadd(path))
     end
 
     ---@param layout any

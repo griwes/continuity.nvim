@@ -1,5 +1,6 @@
 describe('continuity live state', function()
     local state_file
+    local tabpage = require('continuity.compat.tabpage')
     local test_git = require('tests.helpers.git')
 
     local function close_other_tabpages()
@@ -17,14 +18,14 @@ describe('continuity live state', function()
     end
 
     local function open_file_tabpage(path)
-        return vim.api.nvim_open_tabpage(vim.fn.bufadd(path), true, {})
+        return tabpage.open(vim.fn.bufadd(path))
     end
 
     local function isolate_fresh_tabpage()
-        local tabpage = vim.api.nvim_open_tabpage(0, true, {})
+        local fresh_tabpage = tabpage.open()
 
         for _, candidate in ipairs(vim.api.nvim_list_tabpages()) do
-            if candidate ~= tabpage and vim.api.nvim_tabpage_is_valid(candidate) then
+            if candidate ~= fresh_tabpage and vim.api.nvim_tabpage_is_valid(candidate) then
                 vim.api.nvim_set_current_tabpage(candidate)
                 local ok, err = pcall(vim.api.nvim_win_close, vim.api.nvim_tabpage_get_win(candidate), true)
 
@@ -34,7 +35,7 @@ describe('continuity live state', function()
             end
         end
 
-        vim.api.nvim_set_current_tabpage(tabpage)
+        vim.api.nvim_set_current_tabpage(fresh_tabpage)
     end
 
     before_each(function()
