@@ -125,10 +125,9 @@ include stable fields such as `id`, `value`, `name`, `cwd`, `branch`,
 
 ## Development
 
-- tests live in `tests/`
-- formatting is enforced with Stylua
-- Lua modules should carry LuaLS annotations and doc comments
-- CI lives in `.github/workflows/ci.yml`
+Run `scripts/ci/run.sh` for the same Stylua and test gates used by CI. Tests
+live under `tests/`; the GitHub Actions workflow is
+`.github/workflows/ci.yml`.
 
 ## License
 
