@@ -126,7 +126,8 @@ include stable fields such as `id`, `value`, `name`, `cwd`, `branch`,
 ## Development
 
 Run `scripts/ci/run.sh` for the repository-local Stylua, test, and clean-install
-smoke checks. GitHub Actions runs them on Neovim 0.11.5, stable, and nightly and
+smoke checks. GitHub Actions runs the tests and clean-install smoke checks on
+Neovim 0.11.5, stable, and nightly. A separate lint job runs Stylua and
 validates workflow syntax with actionlint. Tests live under `tests/`; the
 workflow is `.github/workflows/ci.yml`.
 
